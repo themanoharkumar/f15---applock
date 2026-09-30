@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme with translucent system bars suitable for edge-to-edge Compose -->
+    <style name="Theme.AppLock" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- Phase 5.2: Instant Lock Screen Theme with zero window animation delay and black solid preview -->
+    <style name="Theme.AppLock.LockScreen" parent="Theme.AppLock">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>

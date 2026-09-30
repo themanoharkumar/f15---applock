@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Phase 6: Device Admin metadata for App Lock DPC.
+     Declares the minimum policies required for app-lock management.
+     Additional policies will be added as specific management features
+     are implemented in future phases. -->
+<device-admin xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-policies>
+        <!-- Required for Device Owner operations and basic device administration -->
+        <force-lock />
+        <watch-login />
+        <reset-password />
+        <limit-password />
+        <wipe-data />
+    </uses-policies>
+</device-admin>

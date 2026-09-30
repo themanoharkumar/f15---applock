@@ -1,0 +1,188 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <string name="app_name">App Lock</string>
+    <string name="app_subtitle">Protect your apps</string>
+    <string name="search_placeholder">Search apps...</string>
+    <string name="search_clear">Clear search</string>
+    <string name="protected_count">Protected apps: %1$d</string>
+    <string name="loading_apps">Loading installed applications...</string>
+    <string name="empty_apps_title">No applications found</string>
+    <string name="empty_apps_desc">No applications match your search query.</string>
+    <string name="empty_installed_desc">No launchable applications were detected on this device.</string>
+    <string name="refresh_apps">Refresh</string>
+    <string name="retry">Retry</string>
+    <string name="error_loading">Failed to load installed applications</string>
+    <string name="filter_all">All</string>
+    <string name="filter_locked">Locked</string>
+    <string name="filter_unlocked">Unlocked</string>
+
+    <!-- Phase 2: PIN Setup -->
+    <string name="create_pin_title">Create your PIN</string>
+    <string name="create_pin_desc">Choose a 4 to 8 digit PIN to protect your settings</string>
+    <string name="confirm_pin_title">Confirm your PIN</string>
+    <string name="confirm_pin_desc">Re-enter your PIN to verify</string>
+    <string name="pin_mismatch">PINs do not match. Try again.</string>
+    <string name="pin_too_short">PIN must be at least 4 digits</string>
+    <string name="pin_created_success">PIN configured successfully</string>
+
+    <!-- Phase 2: Authentication Screen -->
+    <string name="enter_pin_title">App Lock</string>
+    <string name="enter_pin_desc">Enter your PIN to continue</string>
+    <string name="incorrect_pin">Incorrect PIN</string>
+    <string name="locked_out_prefix">Too many attempts. Try again in</string>
+    <string name="use_fingerprint">Use Fingerprint</string>
+    <string name="biometric_prompt_title">Unlock App Lock</string>
+    <string name="biometric_prompt_subtitle">Confirm your fingerprint to access App Lock</string>
+    <string name="biometric_prompt_negative">Use PIN</string>
+
+    <!-- Phase 2: Security Settings -->
+    <string name="security_settings_title">Security Settings</string>
+    <string name="section_pin">PIN Authentication</string>
+    <string name="section_biometric">Biometrics</string>
+    <string name="section_session">Session &amp; Timeout</string>
+    <string name="change_pin">Change PIN</string>
+    <string name="change_pin_desc">Update your current App Lock PIN</string>
+    <string name="remove_pin">Remove PIN</string>
+    <string name="remove_pin_desc">Disable PIN security and reset settings</string>
+    <string name="remove_pin_confirm_title">Remove App Lock PIN?</string>
+    <string name="remove_pin_confirm_desc">Removing your PIN will disable biometric unlock and all app lock protection until a new PIN is created.</string>
+    <string name="use_fingerprint_title">Use Fingerprint</string>
+    <string name="use_fingerprint_desc">Unlock using your fingerprint sensor</string>
+    <string name="biometric_not_supported">Biometric hardware not available on this device</string>
+    <string name="biometric_none_enrolled">No fingerprints enrolled in device Settings</string>
+    <string name="lock_after_title">Lock after</string>
+    <string name="lock_after_desc">Require authentication when leaving the app</string>
+    <string name="timeout_immediately">Immediately</string>
+    <string name="timeout_30s">30 seconds</string>
+    <string name="timeout_1m">1 minute</string>
+    <string name="timeout_5m">5 minutes</string>
+
+    <!-- Phase 2: Change PIN Dialog -->
+    <string name="verify_current_pin_title">Enter Current PIN</string>
+    <string name="enter_new_pin_title">Enter New PIN</string>
+    <string name="confirm_new_pin_title">Confirm New PIN</string>
+    <string name="pin_changed_success">PIN changed successfully</string>
+    <string name="pin_removed_success">PIN removed</string>
+    <string name="cancel">Cancel</string>
+    <string name="confirm">Confirm</string>
+    <string name="settings">Settings</string>
+    <string name="back">Back</string>
+
+    <!-- Phase 3: Notifications & Foreground Service -->
+    <string name="notification_channel_name">App Lock Background Monitoring</string>
+    <string name="notification_channel_desc">Monitors foreground applications to trigger lock protection</string>
+    <string name="monitoring_notification_title">App Lock Protection Active</string>
+    <string name="monitoring_notification_text">Monitoring protected applications</string>
+
+    <!-- Phase 3: Lock Screen -->
+    <string name="app_locked_title">App Locked</string>
+    <string name="app_locked_desc">This app is protected by App Lock.</string>
+
+    <!-- Phase 3 & 4: App Detection & Monitoring Settings -->
+    <string name="section_monitoring">App Detection &amp; Monitoring</string>
+    <string name="usage_access_title">Usage Access</string>
+    <string name="usage_access_desc">Required to detect which application enters the foreground.</string>
+    <string name="usage_access_grant">Enable</string>
+    <string name="usage_access_granted">Enabled</string>
+    <string name="usage_access_dialog_title">Usage Access Required</string>
+    <string name="usage_access_dialog_desc">App Lock needs permission to determine which application is currently in the foreground so it can protect the applications you selected.</string>
+    <string name="service_monitoring_title">Background Monitoring</string>
+    <string name="service_monitoring_desc">Actively monitor and trigger lock when protected apps open</string>
+    <string name="battery_status_title">Battery Optimization</string>
+    <string name="battery_status_desc">Samsung One UI may restrict background monitoring if set to Optimized.</string>
+    <string name="battery_status_unrestricted">Unrestricted</string>
+    <string name="battery_status_optimized">Optimized (May delay lock triggers)</string>
+
+    <!-- Phase 4: Accessibility Service -->
+    <string name="accessibility_service_name">App Lock Protection Service</string>
+    <string name="accessibility_service_desc">Monitors foreground window changes to trigger lock protection for your selected apps with zero delay.</string>
+    <string name="accessibility_title">Accessibility Service</string>
+    <string name="accessibility_desc">Provides instant, real-time protection when protected apps open.</string>
+    <string name="accessibility_grant">Enable</string>
+    <string name="accessibility_granted">Enabled</string>
+    <string name="accessibility_dialog_title">Enable Accessibility Service</string>
+    <string name="accessibility_dialog_desc">To block protected apps instantly on your Samsung Galaxy F15 5G, please enable \'App Lock Protection Service\' in Accessibility settings.\n\nTap Go to Settings &gt; Installed apps &gt; App Lock Protection Service &gt; Turn On.</string>
+    <string name="go_to_settings">Go to Settings</string>
+
+    <!-- Phase 4: Lock Engine Status -->
+    <string name="lock_engine_status_title">Lock Engine</string>
+    <string name="lock_engine_active_accessibility">Active (Real-time Accessibility)</string>
+    <string name="lock_engine_active_usage_stats">Active (Usage Access Fallback)</string>
+    <string name="lock_engine_limited">Limited (Accessibility recommended)</string>
+    <string name="lock_engine_disabled">Disabled (Permissions required)</string>
+    <string name="protected_apps_stat">Protected Apps</string>
+    <string name="protected_apps_stat_format">%1$d apps</string>
+
+    <!-- Phase 4: Live Diagnostics / Debug Mode -->
+    <string name="section_diagnostics">Diagnostic Monitor (Debug Mode)</string>
+    <string name="diag_current_pkg">Current package:</string>
+    <string name="diag_previous_pkg">Previous package:</string>
+    <string name="diag_monitoring_status">Accessibility Service:</string>
+    <string name="diag_detection_source">Detection source:</string>
+    <string name="diag_is_protected">Protected app:</string>
+    <string name="diag_auth_status">Authorization:</string>
+    <string name="diag_engine_state">Engine state:</string>
+    <string name="diag_last_lock">Last lock request:</string>
+    <string name="none">None</string>
+
+    <!-- Phase 5: Security Hardening, Audit Log & Health Check -->
+    <string name="section_security_health">Security Health &amp; Integrity</string>
+    <string name="health_status_secure">Secure — Full Protection Active</string>
+    <string name="health_status_warning">Warning — Incomplete Protection</string>
+    <string name="health_status_degraded">Degraded — Enforcement Degraded</string>
+    <string name="health_status_setup">Setup Required — PIN Needed</string>
+    <string name="view_audit_log">Security Audit Log</string>
+    <string name="view_audit_log_desc">Review recent authorization events and detection logs</string>
+    <string name="cleanup_stale_apps">Clean Stale Packages</string>
+    <string name="cleanup_stale_apps_desc">Purge uninstalled apps from protected database</string>
+    <string name="cleanup_stale_success">Purged %1$d uninstalled protected package(s)</string>
+    <string name="cleanup_stale_none">No stale packages found</string>
+    <string name="window_security_active">Window Snapshot Protection (FLAG_SECURE)</string>
+    <string name="screen_off_lock_active">Screen-Off Auto Lock Active</string>
+
+    <!-- Phase 6: Device Management / DPC -->
+    <string name="device_admin_label">App Lock Device Admin</string>
+    <string name="device_admin_description">Enables device management policies for App Lock protection. Required for advanced features like uninstall protection and force-stop prevention.</string>
+    <string name="section_device_management">Device Management</string>
+    <string name="device_mgmt_status">Management Status</string>
+    <string name="device_mgmt_not_provisioned">Not Provisioned</string>
+    <string name="device_mgmt_not_provisioned_desc">Device management is not yet provisioned. See developer documentation for setup instructions.</string>
+    <string name="device_mgmt_admin_active">Device Admin Active</string>
+    <string name="device_mgmt_admin_active_desc">Device Admin is enabled. Device Owner provisioning required for full management capabilities.</string>
+    <string name="device_mgmt_owner_active">Device Owner Active</string>
+    <string name="device_mgmt_owner_active_desc">Full device management is active. Management policies can be applied.</string>
+    <string name="device_mgmt_unavailable">Device Owner Unavailable</string>
+    <string name="device_mgmt_package">Package</string>
+    <string name="device_mgmt_admin_component">Admin Component</string>
+    <string name="device_mgmt_device_owner">Device Owner</string>
+    <string name="device_mgmt_device_admin">Device Admin</string>
+    <string name="device_mgmt_api_level">API Level</string>
+    <string name="device_mgmt_android_version">Android</string>
+    <string name="device_mgmt_app_version">App Version</string>
+    <string name="device_mgmt_device_model">Device</string>
+    <string name="device_mgmt_state">State</string>
+    <string name="device_mgmt_owner_package">Owner Package</string>
+    <string name="device_mgmt_yes">Yes</string>
+    <string name="device_mgmt_no">No</string>
+    <string name="device_mgmt_none">None</string>
+    <string name="device_mgmt_diagnostics">Device Management Diagnostics</string>
+
+    <!-- Phase 7: Samsung Knox Application Protection -->
+    <string name="section_knox_protection">Samsung Knox Application Protection</string>
+    <string name="knox_title">Samsung Knox</string>
+    <string name="knox_available">Available</string>
+    <string name="knox_unavailable">Unavailable</string>
+    <string name="applock_protection_title">App Lock Self-Protection</string>
+    <string name="policy_force_stop">Force Stop Protection</string>
+    <string name="policy_uninstall">Uninstall Protection</string>
+    <string name="policy_disable">Disable Protection</string>
+    <string name="policy_admin_removable">Admin Removability</string>
+    <string name="policy_battery">Battery Protection</string>
+    <string name="policy_status_active">Active</string>
+    <string name="policy_status_unsupported">Unsupported</string>
+    <string name="policy_status_failed">Failed</string>
+    <string name="policy_status_not_configured">Not Configured</string>
+    <string name="policy_status_license_required">License Required</string>
+    <string name="apply_protection_button">Apply App Lock Protection</string>
+    <string name="remove_protection_button">Remove Protection (Dev/Recovery)</string>
+    <string name="knox_protection_desc">Hardens App Lock against force-stop, uninstallation, disabling, and battery restrictions.</string>
+</resources>
