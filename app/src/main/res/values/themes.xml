@@ -6,10 +6,35 @@
         <item name="android:navigationBarColor">@android:color/transparent</item>
     </style>
 
-    <!-- Phase 5.2: Instant Lock Screen Theme with zero window animation delay and black solid preview -->
+    <!-- Zero-duration activity window animation style -->
+    <style name="Animation.AppLock.Instant" parent="@android:style/Animation.Activity">
+        <item name="android:activityOpenEnterAnimation">@anim/instant_none</item>
+        <item name="android:activityOpenExitAnimation">@anim/instant_none</item>
+        <item name="android:activityCloseEnterAnimation">@anim/instant_none</item>
+        <item name="android:activityCloseExitAnimation">@anim/instant_none</item>
+        <item name="android:taskOpenEnterAnimation">@anim/instant_none</item>
+        <item name="android:taskOpenExitAnimation">@anim/instant_none</item>
+        <item name="android:taskCloseEnterAnimation">@anim/instant_none</item>
+        <item name="android:taskCloseExitAnimation">@anim/instant_none</item>
+        <item name="android:taskToFrontEnterAnimation">@anim/instant_none</item>
+        <item name="android:taskToFrontExitAnimation">@anim/instant_none</item>
+        <item name="android:taskToBackEnterAnimation">@anim/instant_none</item>
+        <item name="android:taskToBackExitAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperOpenEnterAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperOpenExitAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperCloseEnterAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperCloseExitAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperIntraOpenEnterAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperIntraOpenExitAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperIntraCloseEnterAnimation">@anim/instant_none</item>
+        <item name="android:wallpaperIntraCloseExitAnimation">@anim/instant_none</item>
+    </style>
+
+    <!-- Instant Lock Screen Theme: windowDisablePreview=false ensures WindowManager displays solid themed StartingWindow in <16ms, covering protected app before first frame -->
     <style name="Theme.AppLock.LockScreen" parent="Theme.AppLock">
-        <item name="android:windowAnimationStyle">@null</item>
-        <item name="android:windowDisablePreview">true</item>
-        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowAnimationStyle">@style/Animation.AppLock.Instant</item>
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:windowBackground">@color/lock_window_background</item>
+        <item name="android:windowNoTitle">true</item>
     </style>
 </resources>

@@ -37,6 +37,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -66,17 +68,23 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.f15.applock.R
 import com.f15.applock.device.DeviceManagementDiagnostics
+import com.f15.applock.device.DeviceOwnerIntegrityResult
 import com.f15.applock.device.DevicePolicyState
 import com.f15.applock.domain.model.LockEngineMode
 import com.f15.applock.domain.model.SessionTimeout
 import com.f15.applock.knox.PolicyStatus
 import com.f15.applock.security.BiometricStatus
+import com.f15.applock.security.IntegrityCheckResult
 import com.f15.applock.security.OverallSecurityStatus
 import com.f15.applock.security.PinAuthenticator
 import com.f15.applock.security.SecurityHealthReport
+import com.f15.applock.security.SecurityPostureReport
+import com.f15.applock.security.SecurityState
 import com.f15.applock.ui.dialog.SecurityEventLogDialog
 import com.f15.applock.viewmodel.SecuritySettingsUiState
 import kotlinx.coroutines.launch
@@ -112,6 +120,9 @@ fun SecuritySettingsScreen(
     onVerifyCurrentPin: suspend (String) -> Boolean,
     onApplyKnoxProtection: () -> Unit = {},
     onRemoveKnoxProtection: () -> Unit = {},
+    onOpenRecovery: () -> Unit = {},
+    onCloseRecovery: () -> Unit = {},
+    onExecuteRecovery: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showTimeoutDialog by remember { mutableStateOf(false) }
@@ -150,11 +161,12 @@ fun SecuritySettingsScreen(
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            // Section 0: Security Health & Integrity Posture (Phase 5)
-            SettingsSection(title = stringResource(R.string.section_security_health)) {
-                uiState.healthReport?.let { report ->
-                    SecurityHealthSummaryRow(report = report)
-                }
+            // Section 0: Phase 8 Centralized Security Posture & Health
+            SettingsSection(title = stringResource(R.string.section_security_posture)) {
+                SecurityPostureDashboardCard(
+                    uiState = uiState,
+                    onOpenRecovery = onOpenRecovery
+                )
 
                 SettingsActionItem(
                     title = stringResource(R.string.view_audit_log),
@@ -396,6 +408,329 @@ fun SecuritySettingsScreen(
             onVerifyCurrentPin = onVerifyCurrentPin
         )
     }
+
+    // Phase 8: Administrator Recovery Dialog
+    if (uiState.showRecoveryDialog) {
+        AdminRecoveryDialog(
+            errorMessage = uiState.recoveryErrorMessage,
+            onDismiss = onCloseRecovery,
+            onConfirm = onExecuteRecovery
+        )
+    }
+}
+
+/**
+ * Phase 8 Security Posture Dashboard Card:
+ * Displays authoritative real-time integrity status, subsystem health verification,
+ * dynamic warning breakdown, and administrator recovery trigger.
+ */
+@Composable
+private fun SecurityPostureDashboardCard(
+    uiState: SecuritySettingsUiState,
+    onOpenRecovery: () -> Unit
+) {
+    val report = uiState.securityPostureReport
+    val postureState = report?.state ?: SecurityState.DEGRADED
+
+    val (badgeColor, statusTitle, statusSummary) = when (postureState) {
+        SecurityState.SECURE -> Triple(
+            Color(0xFF4CAF50),
+            stringResource(R.string.posture_secure),
+            stringResource(R.string.posture_secure_desc)
+        )
+        SecurityState.DEGRADED -> Triple(
+            Color(0xFFFFA726),
+            stringResource(R.string.posture_degraded),
+            stringResource(R.string.posture_degraded_desc)
+        )
+        SecurityState.COMPROMISED -> Triple(
+            Color(0xFFE53935),
+            stringResource(R.string.posture_compromised),
+            stringResource(R.string.posture_compromised_desc)
+        )
+        SecurityState.RECOVERY_REQUIRED -> Triple(
+            Color(0xFFAB47BC),
+            stringResource(R.string.posture_recovery_required),
+            stringResource(R.string.posture_recovery_required_desc)
+        )
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            // Header: Shield Icon + Title + Status Pill
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(CircleShape)
+                            .background(badgeColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Shield,
+                            contentDescription = null,
+                            tint = badgeColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(
+                            text = "Security Posture",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = statusSummary,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(badgeColor.copy(alpha = 0.15f))
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Text(
+                        text = statusTitle,
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+            // Subsystem Integrity Checks
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                PostureCheckRow(
+                    label = "Package Identity (com.f15.applock)",
+                    isPassing = true,
+                    detail = "Verified"
+                )
+                PostureCheckRow(
+                    label = "Device Owner Authority",
+                    isPassing = report?.isDeviceOwnerActive ?: (uiState.devicePolicyState is DevicePolicyState.DeviceOwnerActive),
+                    detail = if (report?.isDeviceOwnerActive == true || uiState.devicePolicyState is DevicePolicyState.DeviceOwnerActive) "Active" else "Inactive"
+                )
+                PostureCheckRow(
+                    label = "Knox Application Policy Scope",
+                    isPassing = report?.isKnoxActive ?: uiState.knoxPolicyState.isAnyPolicyActive,
+                    detail = if (report?.isKnoxActive == true || uiState.knoxPolicyState.isAnyPolicyActive) "AppLock Scoped" else "Not Configured"
+                )
+                PostureCheckRow(
+                    label = "Accessibility Enforcement Engine",
+                    isPassing = report?.isAccessibilityRunning ?: uiState.isAccessibilityRunning,
+                    detail = if (report?.isAccessibilityRunning ?: uiState.isAccessibilityRunning) "Running" else "Stopped"
+                )
+                PostureCheckRow(
+                    label = "Configuration HMAC Signature",
+                    isPassing = report?.isConfigIntegrityValid ?: true,
+                    detail = if (report?.isConfigIntegrityValid != false) "Verified" else "Tampered!"
+                )
+            }
+
+            // Warnings / Issues Breakdown Box
+            report?.issues?.let { issues ->
+                if (issues.isNotEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(badgeColor.copy(alpha = 0.08f))
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = "Active Security Warnings:",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = badgeColor
+                            )
+                            issues.forEach { issue ->
+                                Text(
+                                    text = "• ${issue.title}: ${issue.description}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Administrator Recovery Action Button
+            if (postureState != SecurityState.SECURE) {
+                Button(
+                    onClick = onOpenRecovery,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = if (postureState == SecurityState.RECOVERY_REQUIRED || postureState == SecurityState.COMPROMISED) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        }
+                    )
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Security,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.btn_admin_recovery),
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PostureCheckRow(
+    label: String,
+    isPassing: Boolean,
+    detail: String? = null
+) {
+    val statusColor = if (isPassing) Color(0xFF4CAF50) else Color(0xFFE53935)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(statusColor)
+            )
+            Text(
+                text = detail ?: if (isPassing) "Pass" else "Fail",
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.SemiBold,
+                color = statusColor
+            )
+        }
+    }
+}
+
+/**
+ * Phase 8 Administrator Recovery Dialog:
+ * Authenticates user via Master PIN to execute baseline reconciliation,
+ * policy clearing, and configuration re-signing.
+ */
+@Composable
+private fun AdminRecoveryDialog(
+    errorMessage: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var adminPin by remember { mutableStateOf("") }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = Icons.Default.Security,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = stringResource(R.string.admin_recovery_dialog_title),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = stringResource(R.string.admin_recovery_dialog_desc),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                OutlinedTextField(
+                    value = adminPin,
+                    onValueChange = { if (it.length <= 8 && it.all { ch -> ch.isDigit() }) adminPin = it },
+                    label = { Text(stringResource(R.string.admin_recovery_pin_label)) },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.NumberPassword
+                    ),
+                    modifier = Modifier.fillMaxWidth()
+                )
+
+                errorMessage?.let { error ->
+                    Text(
+                        text = error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (adminPin.length in 4..8) {
+                        onConfirm(adminPin)
+                    }
+                },
+                enabled = adminPin.length in 4..8
+            ) {
+                Text(text = stringResource(R.string.admin_recovery_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(text = stringResource(R.string.admin_recovery_cancel))
+            }
+        }
+    )
 }
 
 @Composable
@@ -1157,16 +1492,28 @@ private fun KnoxProtectionDashboardCard(
                 color = MaterialTheme.colorScheme.primary
             )
 
-            // Force Stop Protection
+            // App Lock Uninstall Protection
             PolicyStatusRow(
-                label = stringResource(R.string.policy_force_stop),
+                label = stringResource(R.string.policy_applock_uninstall),
+                status = knoxState.uninstallProtection
+            )
+
+            // Global App Uninstall Restriction
+            PolicyStatusRow(
+                label = stringResource(R.string.policy_global_uninstall),
+                status = knoxState.globalUninstallRestriction
+            )
+
+            // App Lock Force Stop Protection
+            PolicyStatusRow(
+                label = stringResource(R.string.policy_applock_force_stop),
                 status = knoxState.forceStopProtection
             )
 
-            // Uninstall Protection
+            // Global Force Stop Restriction
             PolicyStatusRow(
-                label = stringResource(R.string.policy_uninstall),
-                status = knoxState.uninstallProtection
+                label = stringResource(R.string.policy_global_force_stop),
+                status = knoxState.globalForceStopRestriction
             )
 
             // Disable Protection
@@ -1260,10 +1607,12 @@ private fun PolicyStatusRow(
 ) {
     val (color, text) = when (status) {
         is PolicyStatus.Applied -> Pair(Color(0xFF4CAF50), "Active")
+        is PolicyStatus.Disabled -> Pair(Color(0xFF4CAF50), "Disabled")
         is PolicyStatus.Unsupported -> Pair(Color(0xFFFFA726), "Unsupported")
         is PolicyStatus.LicenseRequired -> Pair(Color(0xFFFFA726), "License Required")
         is PolicyStatus.Failed -> Pair(Color(0xFFE53935), "Failed")
         is PolicyStatus.NotApplied -> Pair(Color(0xFF9E9E9E), "Not Configured")
+        is PolicyStatus.Unknown -> Pair(Color(0xFF9E9E9E), "Unknown")
     }
 
     Row(

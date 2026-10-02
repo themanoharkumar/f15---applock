@@ -25,6 +25,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+private val KEYPAD_DIGITS = listOf(
+    listOf("1", "2", "3"),
+    listOf("4", "5", "6"),
+    listOf("7", "8", "9"),
+    listOf("C", "0", "BACKSPACE")
+)
+
 /**
  * Custom numeric keypad adhering to Samsung One UI tactile styling.
  */
@@ -38,19 +45,12 @@ fun PinKeypad(
 ) {
     val haptic = LocalHapticFeedback.current
 
-    val digits = listOf(
-        listOf("1", "2", "3"),
-        listOf("4", "5", "6"),
-        listOf("7", "8", "9"),
-        listOf("C", "0", "BACKSPACE")
-    )
-
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        for (row in digits) {
+        for (row in KEYPAD_DIGITS) {
             Row(
                 horizontalArrangement = Arrangement.spacedBy(28.dp),
                 verticalAlignment = Alignment.CenterVertically

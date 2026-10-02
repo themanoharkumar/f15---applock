@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -116,13 +117,18 @@ fun SecurityEventLogDialog(
 
 @Composable
 private fun SecurityEventItem(event: SecurityEvent) {
-    val (icon, tint) = when (event.eventType) {
-        SecurityEventType.AUTH_SUCCESS -> Icons.Default.Lock to MaterialTheme.colorScheme.primary
-        SecurityEventType.AUTH_FAILED -> Icons.Default.Warning to MaterialTheme.colorScheme.error
-        SecurityEventType.AUTH_CANCELLED -> Icons.Default.Info to MaterialTheme.colorScheme.tertiary
-        SecurityEventType.AUTH_REQUESTED -> Icons.Default.Lock to MaterialTheme.colorScheme.secondary
-        SecurityEventType.SCREEN_OFF_LOCK -> Icons.Default.Lock to MaterialTheme.colorScheme.onSurfaceVariant
-        else -> Icons.Default.Info to MaterialTheme.colorScheme.primary
+    val (icon, tint) = when (event.severity) {
+        com.f15.applock.security.SecurityEventSeverity.CRITICAL -> Icons.Default.Warning to MaterialTheme.colorScheme.error
+        com.f15.applock.security.SecurityEventSeverity.ERROR -> Icons.Default.Warning to MaterialTheme.colorScheme.error
+        com.f15.applock.security.SecurityEventSeverity.WARNING -> Icons.Default.Warning to MaterialTheme.colorScheme.tertiary
+        com.f15.applock.security.SecurityEventSeverity.INFO -> when (event.eventType) {
+            SecurityEventType.AUTH_SUCCESS, SecurityEventType.AUTHENTICATION_SUCCESS -> Icons.Default.Lock to MaterialTheme.colorScheme.primary
+            SecurityEventType.AUTH_FAILED, SecurityEventType.AUTHENTICATION_FAILURE -> Icons.Default.Warning to MaterialTheme.colorScheme.error
+            SecurityEventType.AUTH_CANCELLED -> Icons.Default.Info to MaterialTheme.colorScheme.tertiary
+            SecurityEventType.AUTH_REQUESTED -> Icons.Default.Lock to MaterialTheme.colorScheme.secondary
+            SecurityEventType.SCREEN_OFF_LOCK -> Icons.Default.Lock to MaterialTheme.colorScheme.onSurfaceVariant
+            else -> Icons.Default.Info to MaterialTheme.colorScheme.primary
+        }
     }
 
     Box(
@@ -140,31 +146,89 @@ private fun SecurityEventItem(event: SecurityEvent) {
                 imageVector = icon,
                 contentDescription = null,
                 tint = tint,
-                modifier = Modifier.padding(top = 2.dp)
+                modifier = Modifier
+                    .padding(top = 2.dp)
+                    .size(20.dp)
             )
             Spacer(modifier = Modifier.width(10.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        text = event.eventType.name.replace("_", " "),
-                        style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = tint
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // Severity Badge
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(tint.copy(alpha = 0.15f))
+                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                        ) {
+                            Text(
+                                text = event.severity.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = tint
+                            )
+                        }
+
+                        if (event.component.isNotBlank()) {
+                            Text(
+                                text = "[${event.component}]",
+                                style = MaterialTheme.typography.labelSmall,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+
                     Text(
                         text = event.formattedTime,
                         style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = event.eventType.name.replace("_", " "),
+                        style = MaterialTheme.typography.labelMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+
+                    if (event.result != "SUCCESS") {
+                        Text(
+                            text = event.result,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.Bold,
+                            color = if (event.result == "FAILURE" || event.result == "REJECTED") MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.tertiary
+                        )
+                    }
+                }
+
+                if (!event.packageName.isNullOrBlank()) {
+                    Text(
+                        text = "Target: ${event.packageName}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.secondary
+                    )
+                }
+
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
                     text = event.details,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }

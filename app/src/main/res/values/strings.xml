@@ -174,15 +174,46 @@
     <string name="applock_protection_title">App Lock Self-Protection</string>
     <string name="policy_force_stop">Force Stop Protection</string>
     <string name="policy_uninstall">Uninstall Protection</string>
+    <string name="policy_applock_uninstall">App Lock Uninstall Protection</string>
+    <string name="policy_global_uninstall">Global App Uninstall Restriction</string>
+    <string name="policy_applock_force_stop">App Lock Force Stop Protection</string>
+    <string name="policy_global_force_stop">Global Force Stop Restriction</string>
     <string name="policy_disable">Disable Protection</string>
     <string name="policy_admin_removable">Admin Removability</string>
     <string name="policy_battery">Battery Protection</string>
     <string name="policy_status_active">Active</string>
+    <string name="policy_status_disabled">Disabled</string>
     <string name="policy_status_unsupported">Unsupported</string>
     <string name="policy_status_failed">Failed</string>
     <string name="policy_status_not_configured">Not Configured</string>
     <string name="policy_status_license_required">License Required</string>
     <string name="apply_protection_button">Apply App Lock Protection</string>
     <string name="remove_protection_button">Remove Protection (Dev/Recovery)</string>
-    <string name="knox_protection_desc">Hardens App Lock against force-stop, uninstallation, disabling, and battery restrictions.</string>
+    <string name="knox_protection_desc">Hardens App Lock against force-stop, uninstallation, disabling, and battery restrictions without affecting user applications.</string>
+
+    <!-- Phase 8: Anti-Tamper & Security Hardening -->
+    <string name="section_security_posture">Security Posture</string>
+    <string name="posture_secure">SECURE</string>
+    <string name="posture_secure_desc">All security and integrity checks passed. Protection fully active.</string>
+    <string name="posture_degraded">DEGRADED</string>
+    <string name="posture_degraded_desc">One or more security components require user attention or enablement.</string>
+    <string name="posture_compromised">COMPROMISED</string>
+    <string name="posture_compromised_desc">Security violation, privilege loss, or configuration tampering detected.</string>
+    <string name="posture_recovery_required">RECOVERY REQUIRED</string>
+    <string name="posture_recovery_required_desc">Emergency state: Global restrictions or severe integrity failure requires recovery.</string>
+    <string name="btn_admin_recovery">Administrator Recovery</string>
+    <string name="admin_recovery_dialog_title">Administrator Recovery</string>
+    <string name="admin_recovery_dialog_desc">Enter your Master PIN to authenticate recovery. This will clear improper global restrictions, re-sign protected configurations, and re-evaluate security posture.</string>
+    <string name="admin_recovery_pin_label">Master PIN</string>
+    <string name="admin_recovery_confirm">Execute Recovery</string>
+    <string name="admin_recovery_cancel">Cancel</string>
+    <string name="admin_recovery_invalid_pin">Invalid Master PIN. Recovery aborted.</string>
+    <string name="admin_recovery_success">Security recovery completed successfully.</string>
+    <string name="severity_info">INFO</string>
+    <string name="severity_warning">WARN</string>
+    <string name="severity_error">ERROR</string>
+    <string name="severity_critical">CRITICAL</string>
+    <string name="security_integrity_status">Config HMAC Integrity</string>
+    <string name="security_device_identity">Package Identity</string>
+    <string name="policy_status_unknown">Unknown</string>
 </resources>

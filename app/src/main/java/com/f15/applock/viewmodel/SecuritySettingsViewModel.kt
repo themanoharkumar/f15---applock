@@ -62,7 +62,12 @@ data class SecuritySettingsUiState(
     val deviceManagementDiagnostics: DeviceManagementDiagnostics? = null,
     // Phase 7: Samsung Knox Application Protection
     val knoxPolicyState: com.f15.applock.knox.KnoxPolicyState = com.f15.applock.knox.KnoxPolicyState(),
-    val knoxCapability: com.f15.applock.knox.KnoxCapability = com.f15.applock.knox.KnoxCapability.Unavailable
+    val knoxCapability: com.f15.applock.knox.KnoxCapability = com.f15.applock.knox.KnoxCapability.Unavailable,
+    // Phase 8: Centralized Security Posture & Recovery
+    val securityPostureReport: com.f15.applock.security.SecurityPostureReport? = null,
+    val showRecoveryDialog: Boolean = false,
+    val recoveryErrorMessage: String? = null,
+    val recoverySuccessMessage: String? = null
 )
 
 /**
@@ -87,6 +92,13 @@ class SecuritySettingsViewModel(
     private val lockController = LockController.getInstance(context)
     private val deviceOwnerManager = DeviceOwnerManager.getInstance(context)
     private val knoxManager = com.f15.applock.knox.KnoxManagerImpl.getInstance(context)
+    private val securityStateManager = com.f15.applock.security.SecurityStateManager.getInstance(context)
+    private val securityRecoveryManager = com.f15.applock.security.SecurityRecoveryManager(
+        context,
+        credentialStore,
+        preferences,
+        securityStateManager
+    )
     private val healthChecker = SecurityHealthChecker(
         context,
         preferences,
@@ -153,6 +165,11 @@ class SecuritySettingsViewModel(
                 )
             }
         }
+        viewModelScope.launch {
+            securityStateManager.postureFlow.collect { posture ->
+                _uiState.value = _uiState.value.copy(securityPostureReport = posture)
+            }
+        }
         refreshMonitoringStatus()
     }
 
@@ -188,6 +205,11 @@ class SecuritySettingsViewModel(
         refreshDeviceManagementState()
 
         refreshHealthReport()
+
+        // Phase 8: Evaluate overall security posture
+        viewModelScope.launch {
+            securityStateManager.evaluateSecurityPosture()
+        }
     }
 
     private fun refreshHealthReport() {
@@ -435,6 +457,50 @@ class SecuritySettingsViewModel(
                 actionSuccessMessage = "Application protection removed",
                 actionErrorMessage = null
             )
+        }
+    }
+
+    /**
+     * Opens the Administrator Recovery dialog.
+     */
+    fun openRecoveryDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRecoveryDialog = true,
+            recoveryErrorMessage = null,
+            recoverySuccessMessage = null
+        )
+    }
+
+    /**
+     * Closes the Administrator Recovery dialog.
+     */
+    fun closeRecoveryDialog() {
+        _uiState.value = _uiState.value.copy(
+            showRecoveryDialog = false,
+            recoveryErrorMessage = null
+        )
+    }
+
+    /**
+     * Executes the secure Administrator Recovery procedure with Master PIN verification.
+     */
+    fun executeRecovery(adminPin: String, onComplete: ((Boolean) -> Unit)? = null) {
+        viewModelScope.launch {
+            val result = securityRecoveryManager.executeRecovery(adminPin)
+            if (result.isSuccess) {
+                _uiState.value = _uiState.value.copy(
+                    showRecoveryDialog = false,
+                    recoverySuccessMessage = result.message,
+                    recoveryErrorMessage = null
+                )
+                refreshMonitoringStatus()
+                onComplete?.invoke(true)
+            } else {
+                _uiState.value = _uiState.value.copy(
+                    recoveryErrorMessage = result.message
+                )
+                onComplete?.invoke(false)
+            }
         }
     }
 

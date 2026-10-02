@@ -1,0 +1,89 @@
+package com.f15.applock.data.repository
+
+import android.content.Context
+import android.content.pm.PackageManager
+import android.graphics.drawable.Drawable
+import android.util.Log
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import java.util.concurrent.ConcurrentHashMap
+
+/**
+ * Metadata cache for protected application labels and icons.
+ *
+ * Prevents synchronous main-thread APK decompression and package manager IPC
+ * during [com.f15.applock.ui.activity.LockScreenActivity.onCreate].
+ */
+data class TargetAppInfo(
+    val packageName: String,
+    val label: String,
+    val icon: Drawable?
+)
+
+object AppTargetCache {
+    private const val TAG = "AppTargetCache"
+
+    private val cache = ConcurrentHashMap<String, TargetAppInfo>()
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /**
+     * Resolves app metadata synchronously if cached, or returns a lightweight fallback
+     * while scheduling an asynchronous background prefetch. Never blocks the main thread.
+     */
+    fun getTargetInfo(context: Context, packageName: String): TargetAppInfo {
+        if (packageName.isBlank()) {
+            return TargetAppInfo("", "", null)
+        }
+
+        val cached = cache[packageName]
+        if (cached != null) {
+            return cached
+        }
+
+        // Fast fallback for Frame 0 (unblocked UI)
+        val fallbackLabel = try {
+            val pm = context.packageManager
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            pm.getApplicationLabel(appInfo).toString()
+        } catch (e: Exception) {
+            packageName
+        }
+
+        val fallback = TargetAppInfo(packageName, fallbackLabel, null)
+
+        // Asynchronously load the icon in background without stalling onCreate
+        scope.launch {
+            loadAndCache(context, packageName)
+        }
+
+        return fallback
+    }
+
+    /**
+     * Pre-warms the cache in background for all user-locked applications.
+     */
+    fun prewarm(context: Context, packages: Set<String>) {
+        scope.launch {
+            for (pkg in packages) {
+                if (!cache.containsKey(pkg)) {
+                    loadAndCache(context, pkg)
+                }
+            }
+        }
+    }
+
+    private fun loadAndCache(context: Context, packageName: String) {
+        try {
+            val pm = context.packageManager
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            val label = pm.getApplicationLabel(appInfo).toString()
+            val icon = pm.getApplicationIcon(packageName)
+            cache[packageName] = TargetAppInfo(packageName, label, icon)
+            Log.d(TAG, "Prewarmed metadata for '$packageName'")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resolve metadata for '$packageName'", e)
+        }
+    }
+}

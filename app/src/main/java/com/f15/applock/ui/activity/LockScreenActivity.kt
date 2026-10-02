@@ -4,6 +4,7 @@ import android.content.Intent
 import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.util.Log
+import com.f15.applock.data.repository.AppTargetCache
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -106,6 +107,7 @@ class LockScreenActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        applyInstantTransitions()
         // Hardening: Prevent screen capture, recents snapshot preview, and screen recording
         window.setFlags(
             android.view.WindowManager.LayoutParams.FLAG_SECURE,
@@ -117,6 +119,7 @@ class LockScreenActivity : FragmentActivity() {
         currentTargetPackage = initialPackage
         Log.d(TAG, "[AERA/AppLock] LOCK_ACTIVITY: onCreate | package=$initialPackage")
         updateTargetPackage(initialPackage)
+        authViewModel.resetForLockScreen()
 
         setContent {
             AppLockTheme {
@@ -140,10 +143,7 @@ class LockScreenActivity : FragmentActivity() {
                     targetAppIcon = currentIcon,
                     targetPackageName = targetPackage,
                     uiState = authUiState,
-                    onDigitEntered = { digit ->
-                        LockController.getInstance(applicationContext).onAuthenticating(targetPackage)
-                        authViewModel.onDigitEntered(digit)
-                    },
+                    onDigitEntered = authViewModel::onDigitEntered,
                     onBackspace = authViewModel::onBackspace,
                     onClear = authViewModel::onClear,
                     onRequestBiometric = ::triggerBiometricPrompt,
@@ -157,14 +157,9 @@ class LockScreenActivity : FragmentActivity() {
         targetPackage = pkg
         currentTargetPackage = pkg
         if (pkg.isNotEmpty()) {
-            try {
-                val info = packageManager.getApplicationInfo(pkg, 0)
-                appLabelState.value = packageManager.getApplicationLabel(info).toString()
-                appIconState.value = packageManager.getApplicationIcon(pkg)
-            } catch (e: Exception) {
-                appLabelState.value = pkg
-                appIconState.value = null
-            }
+            val targetInfo = AppTargetCache.getTargetInfo(this, pkg)
+            appLabelState.value = targetInfo.label.ifBlank { pkg }
+            appIconState.value = targetInfo.icon
         } else {
             appLabelState.value = getString(R.string.app_name)
             appIconState.value = null
@@ -173,15 +168,15 @@ class LockScreenActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        applyInstantTransitions()
         setIntent(intent)
+        isAuthenticated = false
         val newPkg = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""
         Log.d(TAG, "[AERA/AppLock] LOCK_ACTIVITY: onNewIntent | package=$newPkg (current=$targetPackage)")
         if (newPkg.isNotEmpty()) {
             currentTargetPackage = newPkg
-            if (newPkg != targetPackage) {
-                updateTargetPackage(newPkg)
-                authViewModel.onClear()
-            }
+            updateTargetPackage(newPkg)
+            authViewModel.resetForLockScreen()
         }
     }
 
@@ -205,7 +200,8 @@ class LockScreenActivity : FragmentActivity() {
         if (!isAuthenticated) {
             Log.d(TAG, "[AERA/AppLock] LOCK_ACTIVITY: user left (Home/Recents) | package=$targetPackage")
             LockController.getInstance(applicationContext).onAuthenticationCancelled(targetPackage)
-            finishAndRemoveTask()
+            applyInstantTransitions()
+            finish()
         }
     }
 
@@ -231,6 +227,7 @@ class LockScreenActivity : FragmentActivity() {
             onSuccess = {
                 isAuthenticatingBiometric = false
                 authViewModel.onBiometricSuccess()
+                onUnlockSuccess()
             },
             onError = { _, _ ->
                 isAuthenticatingBiometric = false
@@ -242,10 +239,12 @@ class LockScreenActivity : FragmentActivity() {
     }
 
     private fun onUnlockSuccess() {
+        if (isAuthenticated) return
         isAuthenticated = true
         authViewModel.onClear() // Wipe entered PIN from memory
         LockController.getInstance(applicationContext).onAuthenticationSuccess(targetPackage)
-        finishAndRemoveTask()
+        applyInstantTransitions()
+        finish()
     }
 
     private fun navigateToHome() {
@@ -255,7 +254,18 @@ class LockScreenActivity : FragmentActivity() {
         }
         startActivity(homeIntent)
         LockController.getInstance(applicationContext).onAuthenticationCancelled(targetPackage)
-        finishAndRemoveTask()
+        applyInstantTransitions()
+        finish()
+    }
+
+    private fun applyInstantTransitions() {
+        if (android.os.Build.VERSION.SDK_INT >= 34) {
+            overrideActivityTransition(OVERRIDE_TRANSITION_OPEN, 0, 0)
+            overrideActivityTransition(OVERRIDE_TRANSITION_CLOSE, 0, 0)
+        } else {
+            @Suppress("DEPRECATION")
+            overridePendingTransition(0, 0)
+        }
     }
 }
 

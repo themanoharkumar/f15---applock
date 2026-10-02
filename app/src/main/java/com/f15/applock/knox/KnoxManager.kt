@@ -23,6 +23,7 @@ interface KnoxManager {
     fun removeAppProtection(packageName: String): KnoxResult
     fun getAppProtectionStatus(packageName: String): KnoxPolicyState
     fun reconcilePolicies(packageName: String): KnoxPolicyState
+    fun verifyScopeIntegrity(): Boolean
 }
 
 /**
@@ -62,6 +63,10 @@ class KnoxManagerImpl private constructor(private val context: Context) : KnoxMa
     val policyState: StateFlow<KnoxPolicyState> = _policyState.asStateFlow()
 
     init {
+        // Phase 7.1: Immediately purge any accidental global restrictions left from prior runs
+        if (isDeviceOwner()) {
+            applicationPolicy.clearGlobalRestrictions()
+        }
         // Initial capability query
         refreshStatus(context.packageName)
     }
@@ -187,17 +192,19 @@ class KnoxManagerImpl private constructor(private val context: Context) : KnoxMa
             return refreshStatus(packageName)
         }
 
+        // Phase 7.1: Always ensure global restrictions remain cleared
+        applicationPolicy.clearGlobalRestrictions()
+
         val currentState = refreshStatus(packageName)
 
         // Reapply only if expected protection is missing
-        if (!currentState.forceStopProtection.isConfirmedActive ||
-            !currentState.uninstallProtection.isConfirmedActive ||
+        if (!currentState.uninstallProtection.isConfirmedActive ||
             !currentState.disableProtection.isConfirmedActive
         ) {
             Log.i(TAG, "[KnoxManager] Reconciling: re-asserting protection policies for $packageName")
             applyAppProtection(packageName)
         } else {
-            Log.d(TAG, "[KnoxManager] Reconcile: all policies are already active and verified for $packageName")
+            Log.d(TAG, "[KnoxManager] Reconcile: core protection policies are verified active for $packageName")
         }
 
         return refreshStatus(packageName)
@@ -210,7 +217,9 @@ class KnoxManagerImpl private constructor(private val context: Context) : KnoxMa
         val apiLevel = getSdkVersion()
 
         val forceStop = applicationPolicy.verifyForceStopProtection(packageName)
+        val globalForceStop = applicationPolicy.verifyGlobalForceStopRestriction()
         val uninstall = applicationPolicy.verifyUninstallProtection(packageName)
+        val globalUninstall = applicationPolicy.verifyGlobalUninstallRestriction()
         val disable = applicationPolicy.verifyDisableProtection(packageName)
         val adminRemovable = applicationPolicy.verifyAdminRemovable(packageName)
         val battery = applicationPolicy.verifyBatteryProtection(packageName)
@@ -221,7 +230,9 @@ class KnoxManagerImpl private constructor(private val context: Context) : KnoxMa
             knoxApiLevel = apiLevel,
             isDeviceOwner = doActive,
             forceStopProtection = forceStop,
+            globalForceStopRestriction = globalForceStop,
             uninstallProtection = uninstall,
+            globalUninstallRestriction = globalUninstall,
             disableProtection = disable,
             adminRemovableProtection = adminRemovable,
             batteryProtection = battery
@@ -229,5 +240,9 @@ class KnoxManagerImpl private constructor(private val context: Context) : KnoxMa
 
         _policyState.value = state
         return state
+    }
+
+    override fun verifyScopeIntegrity(): Boolean {
+        return applicationPolicy.verifyScopeIntegrity()
     }
 }

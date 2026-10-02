@@ -5,7 +5,9 @@ package com.f15.applock.knox
  */
 sealed class PolicyStatus {
     data object Applied : PolicyStatus()
+    data object Disabled : PolicyStatus()
     data object NotApplied : PolicyStatus()
+    data object Unknown : PolicyStatus()
     data class Failed(val reason: String) : PolicyStatus()
     data class Unsupported(val reason: String) : PolicyStatus()
     data class LicenseRequired(val details: String) : PolicyStatus()
@@ -15,7 +17,9 @@ sealed class PolicyStatus {
     val displayLabel: String
         get() = when (this) {
             is Applied -> "Active"
-            is NotApplied -> "Not Configured"
+            is Disabled -> "Disabled"
+            is NotApplied -> "Inactive"
+            is Unknown -> "Unknown"
             is Failed -> "Failed ($reason)"
             is Unsupported -> "Unsupported"
             is LicenseRequired -> "License Required"
@@ -26,6 +30,7 @@ sealed class PolicyStatus {
  * Composite state model representing all Samsung Knox & Device Owner application protection policies.
  *
  * Source of truth is always verified live via platform / Knox queries.
+ * Phase 7.1: Explicitly tracks package-level self-protection vs global device restrictions.
  */
 data class KnoxPolicyState(
     val isKnoxAvailable: Boolean = false,
@@ -33,7 +38,9 @@ data class KnoxPolicyState(
     val knoxApiLevel: Int? = null,
     val isDeviceOwner: Boolean = false,
     val forceStopProtection: PolicyStatus = PolicyStatus.NotApplied,
+    val globalForceStopRestriction: PolicyStatus = PolicyStatus.Disabled,
     val uninstallProtection: PolicyStatus = PolicyStatus.NotApplied,
+    val globalUninstallRestriction: PolicyStatus = PolicyStatus.Disabled,
     val disableProtection: PolicyStatus = PolicyStatus.NotApplied,
     val adminRemovableProtection: PolicyStatus = PolicyStatus.NotApplied,
     val batteryProtection: PolicyStatus = PolicyStatus.NotApplied
@@ -45,3 +52,4 @@ data class KnoxPolicyState(
                 adminRemovableProtection.isConfirmedActive ||
                 batteryProtection.isConfirmedActive
 }
+

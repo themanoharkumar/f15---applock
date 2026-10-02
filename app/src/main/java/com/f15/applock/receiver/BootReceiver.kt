@@ -47,6 +47,10 @@ class BootReceiver : BroadcastReceiver() {
                     com.f15.applock.knox.KnoxManagerImpl.getInstance(context.applicationContext)
                         .reconcilePolicies(context.packageName)
 
+                    // Phase 8: Reconcile system-wide security posture and audit state
+                    com.f15.applock.security.SecurityStateManager.getInstance(context.applicationContext)
+                        .reconcileOnStartup()
+
                     val detector = ForegroundAppDetector(context.applicationContext)
                     val prefs = AppLockPreferences(context.applicationContext)
                     val lockedCount = prefs.getLockedPackages().size

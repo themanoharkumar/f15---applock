@@ -61,13 +61,45 @@ class AuthenticationViewModel(
     private val sessionManager: SessionManager
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow(AuthUiState())
+    private val _uiState = MutableStateFlow(
+        run {
+            val isConfigured = (authenticationManager as? PinAuthenticator)?.isPinConfiguredSync() ?: true
+            val bioEnabled = preferences.cachedIsBiometricEnabled
+            val bioStatus = biometricAuthenticator.checkBiometricStatus()
+            val isAuthenticated = sessionManager.isAuthenticated.value
+            AuthUiState(
+                isPinConfigured = isConfigured,
+                isBiometricEnabled = bioEnabled,
+                biometricStatus = bioStatus,
+                screenState = when {
+                    !isConfigured -> AuthScreenState.SetupPin
+                    isAuthenticated -> AuthScreenState.Authenticated
+                    else -> AuthScreenState.EnterPin
+                }
+            )
+        }
+    )
     val uiState: StateFlow<AuthUiState> = _uiState.asStateFlow()
 
     private var lockoutJob: Job? = null
 
     init {
         checkInitialAuthState()
+    }
+
+    /**
+     * Resets authentication state for a new lock screen challenge.
+     * Ensures previous session flags or states do not lock out or bypass new attempts.
+     */
+    fun resetForLockScreen() {
+        sessionManager.lockSession()
+        lockoutJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            screenState = AuthScreenState.EnterPin,
+            enteredPin = "",
+            errorMessage = null,
+            lockoutRemainingSeconds = 0
+        )
     }
 
     /**
@@ -89,7 +121,6 @@ class AuthenticationViewModel(
                     isAuthenticated -> AuthScreenState.Authenticated
                     else -> AuthScreenState.EnterPin
                 },
-                enteredPin = "",
                 errorMessage = null
             )
         }

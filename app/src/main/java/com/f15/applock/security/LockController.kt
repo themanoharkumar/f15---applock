@@ -88,6 +88,12 @@ class LockController private constructor(
     @Volatile
     private var lastLockLaunchTime: Long = 0L
 
+    @Volatile
+    private var lastExitedProtectedPackage: String? = null
+
+    @Volatile
+    private var lastExitedProtectedTimestamp: Long = 0L
+
     // Diagnostic timestamps for latency measurement (Section 15)
     @Volatile
     private var timingT1: Long = 0L
@@ -126,6 +132,66 @@ class LockController private constructor(
     }
 
     /**
+     * Early detection hook triggered by AccessibilityEvent.TYPE_WINDOWS_CHANGED before window draw.
+     */
+    fun onEarlyWindowDetected(
+        packageName: String?,
+        source: DetectionSource,
+        eventTimeUptime: Long = SystemClock.uptimeMillis(),
+        receivedTimeUptime: Long = SystemClock.uptimeMillis()
+    ) {
+        if (packageName.isNullOrBlank()) return
+        if (lockDecisionManager.isPackageProtected(packageName)) {
+            onForegroundPackageChanged(packageName, source, eventTimeUptime, receivedTimeUptime)
+        }
+    }
+
+    /**
+     * Detailed window state change handler evaluating window class and full-screen state
+     * to eliminate ghost triggers during teardown of backgrounded apps.
+     */
+    fun onWindowStateChanged(
+        packageName: String?,
+        className: String?,
+        isFullScreen: Boolean,
+        source: DetectionSource,
+        eventTimeUptime: Long = SystemClock.uptimeMillis(),
+        receivedTimeUptime: Long = SystemClock.uptimeMillis()
+    ) {
+        if (packageName.isNullOrBlank()) return
+
+        // 1. Non-activity widget filter:
+        // Popups, toasts, menus, and layout wrappers should never trigger app lock if the package
+        // is not already the active authorized protected app.
+        if (isNonActivityWidget(className) && activeProtectedPackage != packageName) {
+            Log.d(TAG, "[$source] Ignoring non-activity widget event for $packageName ($className)")
+            return
+        }
+
+        // 2. Teardown / Home Exit Grace Filter:
+        // If user just exited this protected package to HOME within the last 1000ms:
+        val now = SystemClock.uptimeMillis()
+        if (securityState == ForegroundSecurityState.HOME &&
+            packageName == lastExitedProtectedPackage &&
+            (now - lastExitedProtectedTimestamp < 1000L)
+        ) {
+            Log.d(TAG, "[$source] Suppressing exit residual event for $packageName ($className)")
+            return
+        }
+
+        onForegroundPackageChanged(packageName, source, eventTimeUptime, receivedTimeUptime)
+    }
+
+    private fun isNonActivityWidget(className: String?): Boolean {
+        if (className.isNullOrBlank()) return false
+        return className.contains("PopupWindow") ||
+                className.contains("Toast") ||
+                className.contains("ListPopupWindow") ||
+                className.contains("MenuPopupWindow") ||
+                className.contains("SoftInputWindow")
+    }
+
+    /**
      * Invoked when a foreground package is detected by either
      * [com.f15.applock.accessibility.AppLockAccessibilityService] (real-time) or
      * [com.f15.applock.detection.ForegroundAppMonitor] (fallback).
@@ -141,14 +207,101 @@ class LockController private constructor(
     ) {
         if (packageName.isNullOrBlank()) return
 
-        // 1. Transient overlay check (soft keyboard, biometric prompt, self, system UI pull-down)
-        if (lockDecisionManager.isTransientOverlay(packageName)) {
-            Log.d(TAG, "[$source] Event: TYPE_WINDOW_STATE_CHANGED | Package: $packageName | State: TRANSIENT_OVERLAY | Decision: IGNORE — OVERLAY")
+        // Drop delayed/stale UsageStats events if real-time AccessibilityService is actively running
+        if (source == DetectionSource.USAGE_STATS && com.f15.applock.accessibility.AppLockAccessibilityService.isServiceRunning) {
+            Log.d(TAG, "[$source] Suppressing stale UsageStats event for $packageName (Accessibility is primary)")
             return
         }
 
         val prevPackage = currentForegroundPackage
         val isNewPackage = (packageName != prevPackage)
+
+        // STEP 0 FAST PATH: If package is in protected set, handle immediately (O(1) in-memory check, <0.001ms)
+        val isProtected = lockDecisionManager.isPackageProtected(packageName)
+        if (isProtected) {
+            val t1 = eventTimeUptime
+            val t2 = receivedTimeUptime
+            val t3 = SystemClock.uptimeMillis()
+
+            // 1. SAME-PACKAGE RULE (Section 10):
+            // If user is already inside this protected application, state is PROTECTED_APP_AUTHORIZED,
+            // and authorization is valid, this is internal activity navigation (e.g. Chat -> Settings -> Back).
+            if (!isNewPackage &&
+                activeProtectedPackage == packageName &&
+                securityState == ForegroundSecurityState.PROTECTED_APP_AUTHORIZED &&
+                lockDecisionManager.isPackageAuthorized(packageName)
+            ) {
+                _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
+                return
+            }
+
+            // 2. New or Re-entry Protected App Launch (e.g. from HOME, Recents, or another app)
+            currentForegroundPackage = packageName
+
+            // 3. Authorization & Fail-Closed Security Decision (Section 8)
+            val shouldLock = lockDecisionManager.shouldLock(packageName)
+            val isAuthorized = lockDecisionManager.isPackageAuthorized(packageName)
+            val t4 = SystemClock.uptimeMillis()
+
+            if (isAuthorized && !shouldLock) {
+                // PROTECTED + AUTHORIZED → ALLOW
+                activeProtectedPackage = packageName
+                securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
+                _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
+                Log.d(TAG, "[AppLock] AUTHORIZATION VALID → ALLOW package=$packageName")
+                scope.launch {
+                    updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = false)
+                }
+                return
+            }
+
+            // 4. Duplicate Event Protection (Section 13)
+            val now = System.currentTimeMillis()
+            val isScreenAlreadyResumed = LockScreenActivity.isResumed && LockScreenActivity.currentTargetPackage == packageName
+            val isLaunchInProgress = (activeLockPackage == packageName && (now - lastLockLaunchTime < 350L))
+
+            if (isScreenAlreadyResumed || isLaunchInProgress) {
+                return
+            }
+
+            // 5. Zero-Delay Lock Presentation: Launch LockScreenActivity IMMEDIATELY before logging or allocations
+            timingT1 = t1
+            timingT2 = t2
+            timingT3 = t3
+            timingT4 = t4
+            timingT5 = SystemClock.uptimeMillis()
+
+            activeProtectedPackage = null
+            activeLockPackage = packageName
+            lastLockLaunchTime = now
+            securityState = ForegroundSecurityState.PROTECTED_APP_LOCKED
+            isLockScreenVisible.set(true)
+
+            // CRITICAL: Launch activity as the very first operation
+            launchLockActivity(packageName)
+
+            // Defer non-critical logging, event tracking, and monitoring status updates
+            _engineState.value = LockEngineState.LockScreenShown(packageName, now)
+            Log.i(TAG, "[AppLock] LOCK TRIGGERED → package=$packageName (Detection=${t2 - t1}ms, Decision=${t4 - t3}ms)")
+
+            SecurityEventLogger.log(
+                SecurityEventType.AUTH_REQUESTED,
+                "Protected app '$packageName' detected via $source. Authentication required."
+            )
+
+            scope.launch {
+                updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = true)
+            }
+            return
+        }
+
+        // NON-PROTECTED PATH (Launchers, System Overlays, and Unprotected Apps)
+
+        // 1. Transient overlay check (soft keyboard, biometric prompt, self, system UI pull-down)
+        if (lockDecisionManager.isTransientOverlay(packageName)) {
+            Log.d(TAG, "[$source] Event: TYPE_WINDOW_STATE_CHANGED | Package: $packageName | State: TRANSIENT_OVERLAY | Decision: IGNORE — OVERLAY")
+            return
+        }
 
         // 2. HOME / Launcher Detection (Section 5)
         if (lockDecisionManager.isLauncherPackage(packageName)) {
@@ -158,11 +311,10 @@ class LockController private constructor(
 
             if (exited != null) {
                 activeProtectedPackage = null
-                Log.i(TAG, "[AppLock] FOREGROUND → HOME")
-                Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
+                lastExitedProtectedPackage = exited
+                lastExitedProtectedTimestamp = SystemClock.uptimeMillis()
+                Log.i(TAG, "[AppLock] FOREGROUND → HOME | PROTECTED EXIT → package=$exited")
                 lockDecisionManager.onPackageExited(exited)
-            } else {
-                Log.d(TAG, "[AppLock] FOREGROUND → HOME")
             }
 
             if (activeLockPackage != null && activeLockPackage != packageName) {
@@ -178,115 +330,26 @@ class LockController private constructor(
         }
 
         // 3. Unprotected Application Detection
-        val isProtected = lockDecisionManager.isPackageProtected(packageName)
-        if (!isProtected) {
-            val exited = activeProtectedPackage
-            currentForegroundPackage = packageName
-            securityState = ForegroundSecurityState.UNPROTECTED_APP
-
-            if (exited != null) {
-                activeProtectedPackage = null
-                Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
-                lockDecisionManager.onPackageExited(exited)
-            }
-
-            if (activeLockPackage != null && activeLockPackage != packageName) {
-                activeLockPackage = null
-                isLockScreenVisible.set(false)
-            }
-
-            _engineState.value = LockEngineState.Idle
-            scope.launch {
-                updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = false)
-            }
-            return
-        }
-
-        // 4. Protected Application Foreground Event!
-        val t1 = eventTimeUptime
-        val t2 = receivedTimeUptime
-        val t3 = SystemClock.uptimeMillis()
-
-        Log.i(TAG, "[AppLock] FOREGROUND → PROTECTED package=$packageName")
-
-        // 5. SAME-PACKAGE RULE (Section 10):
-        // If user is already inside this protected application, state is PROTECTED_APP_AUTHORIZED,
-        // and authorization is valid, this is internal activity navigation (e.g. Chat -> Settings -> Back).
-        // DO NOT lock!
-        if (!isNewPackage &&
-            activeProtectedPackage == packageName &&
-            securityState == ForegroundSecurityState.PROTECTED_APP_AUTHORIZED &&
-            lockDecisionManager.isPackageAuthorized(packageName)
-        ) {
-            Log.d(TAG, "[AppLock] SAME-PACKAGE NAVIGATION → package=$packageName (authorized)")
-            _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
-            return
-        }
-
-        // 6. New or Re-entry Protected App Launch (e.g. from HOME, Recents, or another app)
+        val exited = activeProtectedPackage
         currentForegroundPackage = packageName
+        securityState = ForegroundSecurityState.UNPROTECTED_APP
 
-        // 7. Authorization & Fail-Closed Security Decision (Section 8)
-        val shouldLock = lockDecisionManager.shouldLock(packageName)
-        val isAuthorized = lockDecisionManager.isPackageAuthorized(packageName)
-        val t4 = SystemClock.uptimeMillis()
-
-        if (isAuthorized && !shouldLock) {
-            // PROTECTED + AUTHORIZED → ALLOW
-            Log.i(TAG, "[AppLock] AUTHORIZATION → VALID")
-            Log.i(TAG, "[AppLock] LOCK DECISION → ALLOW")
-            activeProtectedPackage = packageName
-            securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
-            _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
-            scope.launch {
-                updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = false)
-            }
-            return
+        if (exited != null) {
+            activeProtectedPackage = null
+            lastExitedProtectedPackage = exited
+            lastExitedProtectedTimestamp = SystemClock.uptimeMillis()
+            Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
+            lockDecisionManager.onPackageExited(exited)
         }
 
-        // PROTECTED + NOT_AUTHORIZED / EXPIRED / UNKNOWN → LOCK (Fail-Closed)
-        Log.i(TAG, "[AppLock] AUTHORIZATION → ${if (isAuthorized) "EXPIRED" else "INVALID"}")
-        Log.i(TAG, "[AppLock] LOCK DECISION → LOCK")
-
-        // 8. Duplicate Event Protection (Section 13)
-        val now = System.currentTimeMillis()
-        val isScreenAlreadyResumed = LockScreenActivity.isResumed && LockScreenActivity.currentTargetPackage == packageName
-        val isLaunchInProgress = (activeLockPackage == packageName && (now - lastLockLaunchTime < 350L))
-
-        if (isScreenAlreadyResumed) {
-            Log.v(TAG, "Duplicate lock suppressed: already resumed for $packageName")
-            return
-        }
-        if (isLaunchInProgress) {
-            Log.v(TAG, "Duplicate lock suppressed: launch in progress for $packageName (${now - lastLockLaunchTime}ms ago)")
-            return
+        if (activeLockPackage != null && activeLockPackage != packageName) {
+            activeLockPackage = null
+            isLockScreenVisible.set(false)
         }
 
-        // 9. Execute Lock Request & Presentation (Section 7: Immediate, fail-closed)
-        timingT1 = t1
-        timingT2 = t2
-        timingT3 = t3
-        timingT4 = t4
-        timingT5 = SystemClock.uptimeMillis()
-
-        activeProtectedPackage = null
-        activeLockPackage = packageName
-        lastLockLaunchTime = now
-        securityState = ForegroundSecurityState.PROTECTED_APP_LOCKED
-        isLockScreenVisible.set(true)
-
-        _engineState.value = LockEngineState.LockScreenShown(packageName, now)
-        SecurityEventLogger.log(
-            SecurityEventType.AUTH_REQUESTED,
-            "Protected app '$packageName' detected via $source. Authentication required."
-        )
-
-        Log.i(TAG, "[AppLock] LOCK REQUEST → package=$packageName")
-        Log.i(TAG, "[AppLock] LOCK ACTIVITY → LAUNCH")
-        launchLockActivity(packageName)
-
+        _engineState.value = LockEngineState.Idle
         scope.launch {
-            updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = true)
+            updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = false)
         }
     }
 

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme lock screen window background matching LightBackground in Compose -->
+    <color name="lock_window_background">#F3F4F6</color>
+</resources>

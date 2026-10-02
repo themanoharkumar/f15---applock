@@ -7,6 +7,9 @@ import android.os.Build
 import android.os.PowerManager
 import android.os.UserManager
 import android.util.Log
+import com.f15.applock.security.SecurityEventLogger
+import com.f15.applock.security.SecurityEventSeverity
+import com.f15.applock.security.SecurityEventType
 import com.samsung.android.knox.EnterpriseDeviceManager
 import com.samsung.android.knox.application.ApplicationPolicy
 
@@ -66,18 +69,30 @@ class KnoxApplicationPolicy(
     }
 
     // ========================================================================
-    // 1. Force Stop Protection
+    // 1. Force Stop Protection (Package-Specific ONLY)
     // ========================================================================
 
     /**
-     * Adds [packageName] to Knox's Force Stop blocklist and applies Android Enterprise
-     * app-control restrictions to disable force-stop in Settings.
+     * Adds [packageName] to Knox's Force Stop blocklist.
+     *
+     * Phase 7.1 Hardening: Strictly package-specific. NEVER applies global user restrictions
+     * (such as DISALLOW_APPS_CONTROL) which would inadvertently block force-stop and uninstall
+     * on normal user applications (WhatsApp, Instagram, Chrome, etc.).
      */
     fun applyForceStopProtection(packageName: String): KnoxResult {
+        // Pre-transaction validation
+        val validation = PolicyTransactionValidator.validateSelfProtectionTarget(packageName)
+        if (validation is PolicyValidationResult.Rejected) {
+            return KnoxResult.SecurityError("Transaction rejected: ${validation.reason} (${validation.violation})")
+        }
+
+        // Ensure any lingering global restrictions are purged
+        clearGlobalRestrictions()
+
         var knoxApplied = false
         var knoxError: String? = null
 
-        // 1. Samsung Knox ApplicationPolicy Force Stop Blocklist
+        // 1. Samsung Knox ApplicationPolicy Force Stop Blocklist (package-specific list)
         val appPolicy = getApplicationPolicy()
         if (appPolicy != null) {
             try {
@@ -105,22 +120,30 @@ class KnoxApplicationPolicy(
             knoxError = "ApplicationPolicy unavailable"
         }
 
-        // 2. Android Enterprise Synergy: DISALLOW_APPS_CONTROL
-        // Grays out Force Stop and Clear Data in Settings for standard users
-        val dpmApplied = try {
-            dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
-            Log.i(TAG, "[DPM] Added user restriction DISALLOW_APPS_CONTROL")
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "[DPM] Failed to add DISALLOW_APPS_CONTROL", e)
-            false
+        // Post-transaction verification
+        val verified = verifyForceStopProtection(packageName)
+        if (verified.isConfirmedActive) {
+            SecurityEventLogger.log(
+                type = SecurityEventType.KNOX_POLICY_VERIFIED,
+                details = "Force stop blocklist verified active for $packageName",
+                component = "SamsungKnox",
+                result = "ACTIVE",
+                packageName = packageName
+            )
+        } else if (knoxError != null) {
+            SecurityEventLogger.log(
+                type = SecurityEventType.POLICY_APPLICATION_FAILED,
+                details = "Force stop blocklist verification failed for $packageName: $knoxError",
+                severity = SecurityEventSeverity.WARNING,
+                component = "SamsungKnox",
+                result = "FAILED",
+                packageName = packageName
+            )
         }
 
         return when {
-            knoxApplied && dpmApplied -> KnoxResult.Success("Force Stop protection active (Knox Blocklist + Android DPM)")
-            knoxApplied -> KnoxResult.Success("Force Stop protection active (Knox Blocklist)")
-            dpmApplied -> KnoxResult.Success("Force Stop protection active via Android Enterprise DISALLOW_APPS_CONTROL" + if (knoxError != null) " (Knox API: $knoxError)" else "")
-            knoxError != null -> KnoxResult.Failed("Failed to apply Force Stop protection: $knoxError")
+            knoxApplied -> KnoxResult.Success("Force Stop protection active (Knox Blocklist for $packageName)")
+            knoxError != null -> KnoxResult.Failed("Knox Force Stop blocklist not applied: $knoxError")
             else -> KnoxResult.Unsupported
         }
     }
@@ -138,17 +161,13 @@ class KnoxApplicationPolicy(
                 Log.w(TAG, "[Knox] Error removing from Force Stop Blocklist", e)
             }
         }
-        try {
-            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
-            Log.i(TAG, "[DPM] Cleared user restriction DISALLOW_APPS_CONTROL")
-        } catch (e: Exception) {
-            Log.w(TAG, "[DPM] Error clearing DISALLOW_APPS_CONTROL", e)
-        }
+        clearGlobalRestrictions()
         return KnoxResult.Success("Force Stop protection removed for $packageName")
     }
 
     /**
      * Authoritatively verifies whether Force Stop protection is active for [packageName].
+     * Only returns [PolicyStatus.Applied] if [packageName] is authoritatively in Knox's blocklist.
      */
     fun verifyForceStopProtection(packageName: String): PolicyStatus {
         val appPolicy = getApplicationPolicy()
@@ -161,36 +180,41 @@ class KnoxApplicationPolicy(
             } catch (e: SecurityException) {
                 val msg = e.message ?: ""
                 Log.d(TAG, "Knox Force Stop verify SecurityException: $msg")
+                return PolicyStatus.LicenseRequired("Knox KPE license required for Force Stop blocklist")
             } catch (e: Exception) {
                 Log.d(TAG, "Knox Force Stop verify Exception: ${e.message}")
             }
         }
 
-        // Verify Android Enterprise fallback (DISALLOW_APPS_CONTROL)
-        return try {
-            val userRestrictions = dpm.getUserRestrictions(adminComponent)
-            if (userRestrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false)) {
-                PolicyStatus.Applied
-            } else {
-                PolicyStatus.NotApplied
-            }
-        } catch (e: Exception) {
-            PolicyStatus.NotApplied
-        }
+        return PolicyStatus.NotApplied
     }
 
     // ========================================================================
-    // 2. Uninstallation Protection
+    // 2. Uninstallation Protection (Package-Specific ONLY)
     // ========================================================================
 
     /**
      * Prevents [packageName] from being uninstalled via Knox and Android Enterprise DPM.
+     *
+     * Phase 7.1 Scope Enforcement:
+     * - Policy is strictly scoped to [packageName] (App Lock: "com.f15.applock").
+     * - Never blocks other user apps (WhatsApp, Instagram, Chrome, etc.).
+     * - Never applies global user restrictions (DISALLOW_UNINSTALL_APPS, DISALLOW_APPS_CONTROL).
      */
     fun applyUninstallProtection(packageName: String): KnoxResult {
+        // Pre-transaction validation
+        val validation = PolicyTransactionValidator.validateSelfProtectionTarget(packageName)
+        if (validation is PolicyValidationResult.Rejected) {
+            return KnoxResult.SecurityError("Transaction rejected: ${validation.reason} (${validation.violation})")
+        }
+
+        // Ensure no global restrictions exist on the user
+        clearGlobalRestrictions()
+
         var knoxSuccess = false
         var knoxError: String? = null
 
-        // 1. Samsung Knox ApplicationPolicy
+        // 1. Samsung Knox ApplicationPolicy (package-specific)
         val appPolicy = getApplicationPolicy()
         if (appPolicy != null) {
             try {
@@ -211,20 +235,41 @@ class KnoxApplicationPolicy(
             }
         }
 
-        // 2. Android Enterprise DevicePolicyManager: setUninstallBlocked
+        // 2. Android Enterprise DevicePolicyManager: setUninstallBlocked (package-specific)
         val dpmSuccess = try {
             dpm.setUninstallBlocked(adminComponent, packageName, true)
             Log.i(TAG, "[DPM] setUninstallBlocked(true) applied for $packageName")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "[DPM] Failed to setUninstallBlocked", e)
+            Log.e(TAG, "[DPM] Failed to setUninstallBlocked for $packageName", e)
             false
         }
 
+        // Post-transaction verification
+        val verified = verifyUninstallProtection(packageName)
+        if (verified.isConfirmedActive) {
+            SecurityEventLogger.log(
+                type = SecurityEventType.KNOX_POLICY_VERIFIED,
+                details = "Uninstall protection verified active for $packageName",
+                component = "SamsungKnox",
+                result = "ACTIVE",
+                packageName = packageName
+            )
+        } else {
+            SecurityEventLogger.log(
+                type = SecurityEventType.POLICY_APPLICATION_FAILED,
+                details = "Uninstall protection could not be verified active for $packageName",
+                severity = SecurityEventSeverity.WARNING,
+                component = "SamsungKnox",
+                result = "FAILED",
+                packageName = packageName
+            )
+        }
+
         return when {
-            knoxSuccess && dpmSuccess -> KnoxResult.Success("Uninstall protection active (Knox + Android DPM)")
-            dpmSuccess -> KnoxResult.Success("Uninstall protection active (Android DPM setUninstallBlocked)" + if (knoxError != null) " (Knox API: $knoxError)" else "")
-            knoxSuccess -> KnoxResult.Success("Uninstall protection active (Samsung Knox)")
+            knoxSuccess && dpmSuccess -> KnoxResult.Success("Uninstall protection active (Knox + Android DPM for $packageName)")
+            dpmSuccess -> KnoxResult.Success("Uninstall protection active (Android DPM setUninstallBlocked for $packageName)" + if (knoxError != null) " (Knox API: $knoxError)" else "")
+            knoxSuccess -> KnoxResult.Success("Uninstall protection active (Samsung Knox for $packageName)")
             knoxError != null -> KnoxResult.Failed("Uninstall protection failed: $knoxError")
             else -> KnoxResult.Unsupported
         }
@@ -249,6 +294,7 @@ class KnoxApplicationPolicy(
         } catch (e: Exception) {
             Log.w(TAG, "[DPM] Error clearing setUninstallBlocked", e)
         }
+        clearGlobalRestrictions()
         return KnoxResult.Success("Uninstall protection removed for $packageName")
     }
 
@@ -274,7 +320,7 @@ class KnoxApplicationPolicy(
             }
         }
 
-        // Check Android Enterprise DPM
+        // Check Android Enterprise DPM (package-specific query)
         try {
             dpmBlocked = dpm.isUninstallBlocked(adminComponent, packageName)
         } catch (e: Exception) {
@@ -288,13 +334,25 @@ class KnoxApplicationPolicy(
     }
 
     // ========================================================================
-    // 3. Application Disabling Protection
+    // 3. Application Disabling Protection (Package-Specific ONLY)
     // ========================================================================
 
     /**
      * Ensures [packageName] cannot be disabled by user or background mechanisms.
+     *
+     * In Android Enterprise, the framework intrinsically disallows disabling active Device Owner
+     * packages (throwing SecurityException: "Cannot disable a protected package").
+     * Phase 7.1 Hardening: NEVER applies DISALLOW_APPS_CONTROL.
      */
     fun applyDisableProtection(packageName: String): KnoxResult {
+        // Pre-transaction validation
+        val validation = PolicyTransactionValidator.validateSelfProtectionTarget(packageName)
+        if (validation is PolicyValidationResult.Rejected) {
+            return KnoxResult.SecurityError("Transaction rejected: ${validation.reason} (${validation.violation})")
+        }
+
+        clearGlobalRestrictions()
+
         var knoxSuccess = false
         var knoxError: String? = null
 
@@ -323,18 +381,23 @@ class KnoxApplicationPolicy(
             }
         }
 
-        // DPM DISALLOW_APPS_CONTROL also blocks the user from disabling packages
-        val dpmSuccess = try {
-            dpm.addUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
-            true
-        } catch (e: Exception) {
-            false
+        val dpmProtected = dpm.isDeviceOwnerApp(context.packageName)
+
+        // Post-transaction verification
+        val verified = verifyDisableProtection(packageName)
+        if (verified.isConfirmedActive) {
+            SecurityEventLogger.log(
+                type = SecurityEventType.KNOX_POLICY_VERIFIED,
+                details = "Disable protection verified active for $packageName",
+                component = "SamsungKnox",
+                result = "ACTIVE",
+                packageName = packageName
+            )
         }
 
         return when {
-            knoxSuccess && dpmSuccess -> KnoxResult.Success("Disable protection active (Knox + DPM)")
-            knoxSuccess -> KnoxResult.Success("Disable protection active (Samsung Knox)")
-            dpmSuccess -> KnoxResult.Success("Disable protection active via Android Enterprise DISALLOW_APPS_CONTROL" + if (knoxError != null) " (Knox API: $knoxError)" else "")
+            knoxSuccess -> KnoxResult.Success("Disable protection active (Samsung Knox for $packageName)")
+            dpmProtected -> KnoxResult.Success("Disable protection active (Android Enterprise DO protection for $packageName)" + if (knoxError != null) " (Knox API: $knoxError)" else "")
             knoxError != null -> KnoxResult.Failed("Disable protection failed: $knoxError")
             else -> KnoxResult.Unsupported
         }
@@ -356,14 +419,9 @@ class KnoxApplicationPolicy(
             }
         }
 
-        return try {
-            val restrictions = dpm.getUserRestrictions(adminComponent)
-            if (restrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false)) {
-                PolicyStatus.Applied
-            } else {
-                PolicyStatus.NotApplied
-            }
-        } catch (e: Exception) {
+        return if (dpm.isDeviceOwnerApp(packageName)) {
+            PolicyStatus.Applied
+        } else {
             PolicyStatus.NotApplied
         }
     }
@@ -376,6 +434,12 @@ class KnoxApplicationPolicy(
      * Prevents administrator removal via Knox [EnterpriseDeviceManager.setAdminRemovable].
      */
     fun setAdminRemovable(removable: Boolean, packageName: String): KnoxResult {
+        // Pre-transaction validation
+        val validation = PolicyTransactionValidator.validateSelfProtectionTarget(packageName)
+        if (validation is PolicyValidationResult.Rejected) {
+            return KnoxResult.SecurityError("Transaction rejected: ${validation.reason} (${validation.violation})")
+        }
+
         val edm = getEnterpriseDeviceManager()
         var knoxSuccess = false
         var knoxError: String? = null
@@ -452,5 +516,116 @@ class KnoxApplicationPolicy(
         } else {
             PolicyStatus.NotApplied
         }
+    }
+
+    // ========================================================================
+    // 6. Global Restriction Management & Verification (Phase 7.1)
+    // ========================================================================
+
+    /**
+     * Explicitly clears any accidental global application restrictions
+     * (DISALLOW_APPS_CONTROL, DISALLOW_UNINSTALL_APPS) to ensure normal user applications
+     * can always be uninstalled and controlled.
+     */
+    fun clearGlobalRestrictions() {
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
+            Log.i(TAG, "[DPM] Explicitly cleared global DISALLOW_APPS_CONTROL")
+        } catch (e: Exception) {
+            Log.w(TAG, "[DPM] Error clearing DISALLOW_APPS_CONTROL", e)
+        }
+        try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_UNINSTALL_APPS)
+            Log.i(TAG, "[DPM] Explicitly cleared global DISALLOW_UNINSTALL_APPS")
+        } catch (e: Exception) {
+            Log.w(TAG, "[DPM] Error clearing DISALLOW_UNINSTALL_APPS", e)
+        }
+    }
+
+    /**
+     * Authoritatively verifies whether a global application uninstall restriction is active.
+     * Desired state: [PolicyStatus.Disabled] (Uninstall ALLOWED for normal applications).
+     */
+    fun verifyGlobalUninstallRestriction(): PolicyStatus {
+        return try {
+            val userRestrictions = dpm.getUserRestrictions(adminComponent)
+            val hasDisallowUninstall = userRestrictions.getBoolean(UserManager.DISALLOW_UNINSTALL_APPS, false)
+            val hasDisallowAppsControl = userRestrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false)
+            if (hasDisallowUninstall || hasDisallowAppsControl) {
+                PolicyStatus.Applied // Overly broad restriction is active!
+            } else {
+                PolicyStatus.Disabled // Global restriction is disabled (normal behavior)
+            }
+        } catch (e: Exception) {
+            PolicyStatus.Disabled
+        }
+    }
+
+    /**
+     * Authoritatively verifies whether a global Force Stop restriction is active.
+     * Desired state: [PolicyStatus.Disabled] (Force Stop ALLOWED for normal applications).
+     */
+    fun verifyGlobalForceStopRestriction(): PolicyStatus {
+        return try {
+            val userRestrictions = dpm.getUserRestrictions(adminComponent)
+            val hasDisallowAppsControl = userRestrictions.getBoolean(UserManager.DISALLOW_APPS_CONTROL, false)
+            if (hasDisallowAppsControl) {
+                PolicyStatus.Applied // Global force stop blocked!
+            } else {
+                PolicyStatus.Disabled // Global force stop restriction disabled (normal behavior)
+            }
+        } catch (e: Exception) {
+            PolicyStatus.Disabled
+        }
+    }
+
+    /**
+     * Authoritatively verifies that no overly broad or global restrictions exist on the device.
+     * Guarantees App Lock policies remain strictly package-isolated to "com.f15.applock".
+     *
+     * @return True if policy scope is clean and package-isolated; false if broad/global restrictions detected.
+     */
+    fun verifyScopeIntegrity(): Boolean {
+        // 1. Check user restrictions for global blocks
+        val restrictions = try { dpm.getUserRestrictions(adminComponent) } catch (e: Exception) { null }
+        val restrictionCheck = PolicyTransactionValidator.validateNoGlobalRestrictions(restrictions)
+        if (restrictionCheck is PolicyValidationResult.Rejected) {
+            Log.e(TAG, "[AERA-SECURITY] Scope integrity failure: ${restrictionCheck.reason}")
+            SecurityEventLogger.log(
+                type = SecurityEventType.KNOX_POLICY_MISMATCH,
+                details = "Policy scope integrity failure: ${restrictionCheck.violation}",
+                severity = SecurityEventSeverity.CRITICAL,
+                component = "PolicyValidator",
+                result = "COMPROMISED"
+            )
+            return false
+        }
+
+        // 2. Check Knox force stop blocklist scope if available
+        val appPolicy = getApplicationPolicy()
+        if (appPolicy != null) {
+            try {
+                val blocklist = appPolicy.packagesFromForceStopBlackList
+                if (blocklist != null) {
+                    for (pkg in blocklist) {
+                        if (pkg == "*" || pkg.contains("*") || (!pkg.equals(context.packageName, ignoreCase = true) && !pkg.startsWith("com.f15."))) {
+                            Log.e(TAG, "[AERA-SECURITY] Unexpected package in Knox blocklist: $pkg")
+                            SecurityEventLogger.log(
+                                type = SecurityEventType.KNOX_POLICY_MISMATCH,
+                                details = "Knox force stop blocklist contains unexpected package: $pkg",
+                                severity = SecurityEventSeverity.CRITICAL,
+                                component = "SamsungKnox",
+                                result = "COMPROMISED",
+                                packageName = pkg
+                            )
+                            return false
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // License or query limitation
+            }
+        }
+        return true
     }
 }

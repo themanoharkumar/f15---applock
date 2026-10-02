@@ -285,4 +285,84 @@ class Phase53HomeReentryTest {
 
         assertEquals(1, launchCount)
     }
+
+    @Test
+    fun homeExit_residualTeardownEvents_areSuppressed() {
+        var securityState = ForegroundSecurityState.HOME
+        var lastExitedProtectedPackage = "com.whatsapp"
+        var lastExitedProtectedTimestamp = 1000L
+        var lockRequestsCount = 0
+
+        fun isNonActivityWidget(className: String?): Boolean {
+            if (className.isNullOrBlank()) return false
+            return className.contains("PopupWindow") ||
+                    className.contains("Toast") ||
+                    className.contains("ListPopupWindow") ||
+                    className.contains("MenuPopupWindow") ||
+                    className.contains("SoftInputWindow") ||
+                    className == "android.widget.FrameLayout" ||
+                    className == "android.widget.RelativeLayout" ||
+                    className == "android.widget.LinearLayout" ||
+                    className == "android.view.View" ||
+                    (className.startsWith("android.widget.") && !className.endsWith("Activity"))
+        }
+
+        fun onWindowStateChanged(
+            pkg: String,
+            className: String?,
+            isFullScreen: Boolean,
+            now: Long,
+            activeWindowPkg: String?
+        ) {
+            // Widget filter:
+            if (isNonActivityWidget(className)) {
+                return
+            }
+
+            // Home exit grace filter:
+            if (securityState == ForegroundSecurityState.HOME &&
+                pkg == lastExitedProtectedPackage &&
+                (now - lastExitedProtectedTimestamp < 1500L)
+            ) {
+                if (activeWindowPkg != null && activeWindowPkg != pkg && activeWindowPkg == "com.sec.android.app.launcher") {
+                    return // Suppress residual event while user is visibly on Home
+                }
+                if (!isFullScreen && isNonActivityWidget(className)) {
+                    return
+                }
+            }
+
+            lockRequestsCount++
+        }
+
+        // WhatsApp teardown popup 500ms after exiting to Home
+        onWindowStateChanged(
+            pkg = "com.whatsapp",
+            className = "android.widget.PopupWindow",
+            isFullScreen = false,
+            now = 1500L,
+            activeWindowPkg = "com.sec.android.app.launcher"
+        )
+        assertEquals(0, lockRequestsCount) // SUPPRESSED!
+
+        // WhatsApp background view detached 800ms after exiting to Home
+        onWindowStateChanged(
+            pkg = "com.whatsapp",
+            className = "android.widget.FrameLayout",
+            isFullScreen = false,
+            now = 1800L,
+            activeWindowPkg = "com.sec.android.app.launcher"
+        )
+        assertEquals(0, lockRequestsCount) // SUPPRESSED!
+
+        // User genuinely taps WhatsApp on Home launcher (activity launch, full screen)
+        onWindowStateChanged(
+            pkg = "com.whatsapp",
+            className = "com.whatsapp.HomeActivity",
+            isFullScreen = true,
+            now = 2200L,
+            activeWindowPkg = "com.whatsapp"
+        )
+        assertEquals(1, lockRequestsCount) // TRIGGERED!
+    }
 }

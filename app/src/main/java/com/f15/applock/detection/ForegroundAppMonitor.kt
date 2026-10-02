@@ -70,10 +70,14 @@ class ForegroundAppMonitor(
 
             while (isActive) {
                 try {
-                    // If AccessibilityService is running, it provides zero-delay detection;
-                    // relax polling frequency to 2500ms to preserve battery.
+                    // When AccessibilityService is running, it provides real-time event-driven detection.
+                    // Suspend UsageStats polling to preserve battery and prevent asynchronous stale UsageStats
+                    // events (1-5s delay) from overriding real-time Accessibility state.
                     val isA11yActive = com.f15.applock.accessibility.AppLockAccessibilityService.isServiceRunning
-                    val currentInterval = if (isA11yActive) 2500L else POLL_INTERVAL_MS
+                    if (isA11yActive) {
+                        delay(2500L)
+                        continue
+                    }
 
                     val activePackage = detector.getForegroundPackage()
 
@@ -82,14 +86,14 @@ class ForegroundAppMonitor(
                         previousPackage = prev
                         currentPackage = activePackage
 
-                        // Route through central LockController
+                        // Route through central LockController as fallback
                         com.f15.applock.security.LockController.getInstance(context)
                             .onForegroundPackageChanged(activePackage, com.f15.applock.domain.model.DetectionSource.USAGE_STATS)
 
                         lockDecisionManager.onPackageTransition(prev, activePackage)
                         val requiresLock = lockDecisionManager.shouldLock(activePackage)
 
-                        Log.d(TAG, "UsageStats transition: $prev -> $activePackage | requiresLock: $requiresLock | a11yActive: $isA11yActive")
+                        Log.d(TAG, "UsageStats fallback transition: $prev -> $activePackage | requiresLock: $requiresLock")
 
                         _detectionState.value = _detectionState.value.copy(
                             currentPackage = activePackage,
@@ -98,7 +102,7 @@ class ForegroundAppMonitor(
                             hasUsageAccess = true
                         )
 
-                        if (requiresLock && !isA11yActive) {
+                        if (requiresLock) {
                             val request = LockRequest(activePackage)
                             _detectionState.value = _detectionState.value.copy(
                                 lastLockRequestPackage = activePackage,
@@ -108,7 +112,7 @@ class ForegroundAppMonitor(
                         }
                     }
 
-                    delay(currentInterval)
+                    delay(POLL_INTERVAL_MS)
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in foreground polling cycle", e)
                     delay(POLL_INTERVAL_MS)

@@ -23,6 +23,8 @@ class PinAuthenticator(
         return pin.length in MIN_PIN_LENGTH..MAX_PIN_LENGTH && pin.all { it.isDigit() }
     }
 
+    fun isPinConfiguredSync(): Boolean = credentialStore.isPinConfigured()
+
     override suspend fun isPinConfigured(): Boolean = withContext(Dispatchers.IO) {
         credentialStore.isPinConfigured()
     }

@@ -5,6 +5,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.SystemClock
 import android.util.Log
+import com.f15.applock.data.repository.AppTargetCache
 import com.f15.applock.data.storage.AppLockPreferences
 import com.f15.applock.domain.model.AppAuthorization
 import com.f15.applock.domain.model.SessionTimeout
@@ -51,6 +52,7 @@ class LockDecisionManager(
     @Volatile
     private var cachedLauncherPackage: String? = null
     private val allLauncherPackages = ConcurrentHashMap.newKeySet<String>()
+    private val cachedInputMethodPackages = ConcurrentHashMap.newKeySet<String>()
 
     init {
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -62,9 +64,11 @@ class LockDecisionManager(
         scope.launch {
             preferences.lockedPackagesFlow.collect { packages ->
                 cachedLockedPackages = packages
+                AppTargetCache.prewarm(context, packages)
             }
         }
         refreshLauncherPackages()
+        refreshInputMethods()
     }
 
     // Critical system packages that must never be blocked to prevent bricking or OS deadlocks
@@ -173,15 +177,30 @@ class LockDecisionManager(
         return false
     }
 
-    private fun isInputMethod(packageName: String): Boolean {
-        return try {
+    fun refreshInputMethods() {
+        try {
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as? android.view.inputmethod.InputMethodManager
-            imm?.enabledInputMethodList?.any { it.packageName == packageName } == true ||
-                    packageName.contains("honeyboard") ||
-                    packageName.contains("inputmethod")
-        } catch (e: Throwable) {
-            packageName.contains("honeyboard") || packageName.contains("inputmethod")
+            val list = imm?.enabledInputMethodList
+            if (list != null) {
+                cachedInputMethodPackages.clear()
+                for (imi in list) {
+                    val pkg = imi.packageName
+                    if (!pkg.isNullOrBlank()) {
+                        cachedInputMethodPackages.add(pkg)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resolve enabled input methods", e)
         }
+    }
+
+    private fun isInputMethod(packageName: String): Boolean {
+        if (cachedInputMethodPackages.contains(packageName)) return true
+        return packageName.contains("honeyboard") ||
+                packageName.contains("inputmethod") ||
+                packageName.contains("gboard") ||
+                packageName.contains("swiftkey")
     }
 
     /**

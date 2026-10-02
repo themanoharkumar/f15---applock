@@ -30,42 +30,29 @@ fun PinDotsIndicator(
     isError: Boolean = false,
     modifier: Modifier = Modifier
 ) {
-    // If the user types beyond 4 digits (up to 8), dynamically expand the indicator
     val displaySlots = maxOf(maxDigits, pinLength)
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val errorColor = MaterialTheme.colorScheme.error
+    val emptyBorderColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
 
     Row(
         modifier = modifier,
-        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         for (i in 0 until displaySlots) {
             val isFilled = i < pinLength
-
-            val dotSize by animateDpAsState(
-                targetValue = if (isFilled) 16.dp else 14.dp,
-                animationSpec = tween(durationMillis = 150),
-                label = "dotSize"
-            )
-
-            val fillColor by animateColorAsState(
-                targetValue = when {
-                    isError -> MaterialTheme.colorScheme.error
-                    isFilled -> MaterialTheme.colorScheme.primary
-                    else -> Color.Transparent
-                },
-                animationSpec = tween(durationMillis = 150),
-                label = "fillColor"
-            )
-
-            val borderColor by animateColorAsState(
-                targetValue = when {
-                    isError -> MaterialTheme.colorScheme.error
-                    isFilled -> MaterialTheme.colorScheme.primary
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                },
-                animationSpec = tween(durationMillis = 150),
-                label = "borderColor"
-            )
+            val fillColor = when {
+                isError -> errorColor
+                isFilled -> primaryColor
+                else -> Color.Transparent
+            }
+            val borderColor = when {
+                isError -> errorColor
+                isFilled -> primaryColor
+                else -> emptyBorderColor
+            }
+            val dotSize = if (isFilled) 16.dp else 14.dp
 
             Box(
                 modifier = Modifier

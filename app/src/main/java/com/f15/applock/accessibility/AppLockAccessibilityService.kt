@@ -33,6 +33,10 @@ class AppLockAccessibilityService : AccessibilityService() {
         var isServiceRunning: Boolean = false
             private set
 
+        @Volatile
+        var instance: AppLockAccessibilityService? = null
+            private set
+
         /**
          * Checks whether this AccessibilityService is enabled in Android Settings.
          */
@@ -82,11 +86,21 @@ class AppLockAccessibilityService : AccessibilityService() {
         }
     }
 
+
+
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
+        val info = serviceInfo ?: AccessibilityServiceInfo()
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
+        info.notificationTimeout = 0
+        info.flags = 0
+        serviceInfo = info
+
         isServiceRunning = true
         LockController.getInstance(applicationContext).setAccessibilityEnabled(true)
-        Log.i(TAG, "[AERA-APPLOCK] Accessibility Service connected and active")
+        Log.i(TAG, "[AERA-APPLOCK] Accessibility Service connected (lean, zero-latency event dispatcher)")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
@@ -95,10 +109,12 @@ class AppLockAccessibilityService : AccessibilityService() {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             val pkg = event.packageName?.toString()?.trim()
             if (!pkg.isNullOrEmpty()) {
+                val className = event.className?.toString()?.trim()
+                val isFullScreen = event.isFullScreen
                 val eventTime = event.eventTime
                 val receivedTime = SystemClock.uptimeMillis()
                 LockController.getInstance(applicationContext)
-                    .onForegroundPackageChanged(pkg, DetectionSource.ACCESSIBILITY, eventTime, receivedTime)
+                    .onWindowStateChanged(pkg, className, isFullScreen, DetectionSource.ACCESSIBILITY, eventTime, receivedTime)
             }
         }
     }
@@ -109,6 +125,7 @@ class AppLockAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         super.onDestroy()
+        instance = null
         isServiceRunning = false
         LockController.getInstance(applicationContext).setAccessibilityEnabled(false)
         Log.i(TAG, "[AERA-APPLOCK] Accessibility Service destroyed")

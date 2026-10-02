@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Instant Lock Screen Theme for API 31+ with matching theme window and zero-duration splash -->
+    <style name="Theme.AppLock.LockScreen" parent="Theme.AppLock">
+        <item name="android:windowAnimationStyle">@style/Animation.AppLock.Instant</item>
+        <item name="android:windowDisablePreview">false</item>
+        <item name="android:windowBackground">@color/lock_window_background</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowSplashScreenBackground">@color/lock_window_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
+</resources>

@@ -80,9 +80,10 @@ class MainActivity : FragmentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
-        // Phase 7: Reconcile Samsung Knox & Device Owner application protection on startup
+        // Phase 7 & 8: Reconcile Samsung Knox & Device Owner protection and security posture on startup
         lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             com.f15.applock.knox.KnoxManagerImpl.getInstance(applicationContext).reconcilePolicies(packageName)
+            com.f15.applock.security.SecurityStateManager.getInstance(applicationContext).reconcileOnStartup()
         }
 
         setContent {
@@ -175,6 +176,9 @@ class MainActivity : FragmentActivity() {
                                     onVerifyCurrentPin = securitySettingsViewModel::verifyCurrentPin,
                                     onApplyKnoxProtection = securitySettingsViewModel::applyKnoxProtection,
                                     onRemoveKnoxProtection = securitySettingsViewModel::removeKnoxProtection,
+                                    onOpenRecovery = securitySettingsViewModel::openRecoveryDialog,
+                                    onCloseRecovery = securitySettingsViewModel::closeRecoveryDialog,
+                                    onExecuteRecovery = { pin -> securitySettingsViewModel.executeRecovery(pin) },
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }
