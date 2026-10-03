@@ -92,7 +92,9 @@ class AppLockAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         val info = serviceInfo ?: AccessibilityServiceInfo()
-        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOWS_CHANGED or
+                AccessibilityEvent.TYPE_VIEW_SCROLLED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = 0
         info.flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
@@ -121,6 +123,12 @@ class AppLockAccessibilityService : AccessibilityService() {
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 LockController.getInstance(applicationContext).onWindowsStructureChanged()
             }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                val controller = LockController.getInstance(applicationContext)
+                if (controller.isRecentsScreenActive) {
+                    controller.onRecentsScrolled()
+                }
+            }
         }
     }
 
@@ -133,7 +141,55 @@ class AppLockAccessibilityService : AccessibilityService() {
         instance = null
         isServiceRunning = false
         LockController.getInstance(applicationContext).setAccessibilityEnabled(false)
+        com.f15.applock.ui.overlay.RecentsPrivacyOverlay.hide(this)
         Log.i(TAG, "[AERA-APPLOCK] Accessibility Service destroyed")
+    }
+
+    /**
+     * Searches for any visible protected application task card in the Recent Apps overview.
+     */
+    fun findProtectedCardBoundsInRecents(protectedLabels: List<String>): android.graphics.Rect? {
+        return try {
+            val root = rootInActiveWindow ?: return null
+            val metrics = resources.displayMetrics
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val minCardW = (screenW * 0.35f).toInt()
+            val minCardH = (screenH * 0.30f).toInt()
+
+            for (label in protectedLabels) {
+                if (label.isBlank()) continue
+                val nodes = root.findAccessibilityNodeInfosByText(label)
+                if (!nodes.isNullOrEmpty()) {
+                    for (node in nodes) {
+                        var current: android.view.accessibility.AccessibilityNodeInfo? = node
+                        var bestBounds: android.graphics.Rect? = null
+
+                        while (current != null) {
+                            val bounds = android.graphics.Rect()
+                            current.getBoundsInScreen(bounds)
+                            if (bounds.width() >= minCardW && bounds.height() >= minCardH) {
+                                bestBounds = bounds
+                                break
+                            }
+                            val parent = current.parent
+                            if (current != node) {
+                                current.recycle()
+                            }
+                            current = parent
+                        }
+                        node.recycle()
+
+                        if (bestBounds != null) {
+                            return bestBounds
+                        }
+                    }
+                }
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
     }
 
     /**

@@ -47,6 +47,7 @@ class LockController private constructor(
 
     companion object {
         private const val TAG = "LockController"
+        private const val RECENTS_RETURN_GRACE_MS = 30_000L
 
         @Volatile
         private var INSTANCE: LockController? = null
@@ -75,6 +76,16 @@ class LockController private constructor(
     @Volatile
     var securityState: ForegroundSecurityState = ForegroundSecurityState.UNKNOWN
         private set
+
+    @Volatile
+    var isRecentsScreenActive: Boolean = false
+        private set
+
+    @Volatile
+    private var pendingRecentsProtectedPackage: String? = null
+
+    @Volatile
+    private var pendingRecentsTimestamp: Long = 0L
 
     @Volatile
     private var currentForegroundPackage: String? = null
@@ -153,6 +164,13 @@ class LockController private constructor(
      */
     fun onScreenOff() {
         scope.launch {
+            hideRecentsPrivacyOverlay()
+            if (pendingRecentsProtectedPackage != null) {
+                val recentsExited = pendingRecentsProtectedPackage!!
+                pendingRecentsProtectedPackage = null
+                lockDecisionManager.onPackageExited(recentsExited)
+            }
+            isRecentsScreenActive = false
             val exited = activeProtectedPackage ?: currentForegroundPackage
             lockDecisionManager.onScreenOff(exited)
             securityState = ForegroundSecurityState.UNKNOWN
@@ -242,6 +260,13 @@ class LockController private constructor(
             }
         }
 
+        // 0. Recents / Task Switcher Detection:
+        val isRecents = isRecentsActivity(packageName, className)
+        if (isRecents) {
+            handleRecentsEntered(packageName, source)
+            return
+        }
+
         // 1. Notification & Floating Overlay Suppression:
         // Heads-up notifications (HUN), popup banners, toasts, and floating overlays are NOT full-screen
         // and are NOT activity launches. If a protected app emits a non-full-screen event that is not an Activity,
@@ -282,6 +307,101 @@ class LockController private constructor(
         onForegroundPackageChanged(packageName, source, eventTimeUptime, receivedTimeUptime)
     }
 
+    /**
+     * Checks whether an incoming window event corresponds to the Recent Apps overview / Task Switcher.
+     */
+    fun isRecentsActivity(packageName: String?, className: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        val lowerClass = className?.lowercase() ?: ""
+        if (lowerClass.contains("recents") ||
+            lowerClass.contains("quickstep") ||
+            lowerClass.contains("overview") ||
+            lowerClass.contains("taskview")
+        ) {
+            return true
+        }
+        if (packageName == "com.android.systemui" && lowerClass.contains("recents")) {
+            return true
+        }
+        return false
+    }
+
+    private fun handleRecentsEntered(recentsPackage: String, source: DetectionSource) {
+        val now = SystemClock.uptimeMillis()
+        val exited = activeProtectedPackage
+
+        isRecentsScreenActive = true
+        currentForegroundPackage = recentsPackage
+
+        if (exited != null) {
+            // Protected application was active right before entering Recents!
+            // Establish pending return session without wiping authorization
+            pendingRecentsProtectedPackage = exited
+            pendingRecentsTimestamp = now
+            activeProtectedPackage = null
+            Log.i(TAG, "[$source] Protected app $exited entered Recents overview → pending return grace active")
+        }
+
+        // Show the privacy overlay to mask protected app thumbnail preview in Recents
+        val forceCenter = (pendingRecentsProtectedPackage != null) ||
+                (lastExitedProtectedPackage != null && (now - lastExitedProtectedTimestamp < 300_000L))
+
+        showRecentsPrivacyOverlay(forceCenterIfNoBounds = forceCenter)
+
+        if (activeLockPackage != null) {
+            activeLockPackage = null
+            isLockScreenVisible.set(false)
+        }
+
+        _engineState.value = LockEngineState.Idle
+        scope.launch {
+            updateMonitoringStatus(current = recentsPackage, prev = exited, source = source, requiresLock = false)
+        }
+    }
+
+    private fun showRecentsPrivacyOverlay(forceCenterIfNoBounds: Boolean) {
+        val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance
+        val ctx = a11y ?: context
+        val protectedPkgs = lockDecisionManager.getProtectedPackages()
+        if (protectedPkgs.isEmpty()) return
+        val labels = getProtectedAppLabels(protectedPkgs)
+        val bounds = a11y?.findProtectedCardBoundsInRecents(labels)
+        if (bounds != null || forceCenterIfNoBounds) {
+            com.f15.applock.ui.overlay.RecentsPrivacyOverlay.show(ctx, bounds)
+        }
+    }
+
+    private fun hideRecentsPrivacyOverlay() {
+        val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance
+        com.f15.applock.ui.overlay.RecentsPrivacyOverlay.hide(a11y ?: context)
+    }
+
+    fun onRecentsScrolled() {
+        val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance ?: return
+        val protectedPkgs = lockDecisionManager.getProtectedPackages()
+        if (protectedPkgs.isEmpty()) return
+        val labels = getProtectedAppLabels(protectedPkgs)
+        val bounds = a11y.findProtectedCardBoundsInRecents(labels)
+        if (bounds != null) {
+            com.f15.applock.ui.overlay.RecentsPrivacyOverlay.updatePosition(a11y, bounds)
+        }
+    }
+
+    private fun getProtectedAppLabels(packages: Set<String>): List<String> {
+        val pm = context.packageManager
+        val labels = mutableListOf<String>()
+        for (pkg in packages) {
+            labels.add(pkg)
+            try {
+                val info = pm.getApplicationInfo(pkg, 0)
+                val label = pm.getApplicationLabel(info).toString()
+                if (label.isNotBlank()) labels.add(label)
+            } catch (_: Exception) {
+            }
+        }
+        return labels
+    }
+
     private fun isNonActivityWidget(className: String?): Boolean {
         return AppTargetCache.isCommonView(className)
     }
@@ -314,9 +434,45 @@ class LockController private constructor(
         // STEP 0 FAST PATH: If package is in protected set, handle immediately (O(1) in-memory check, <0.001ms)
         val isProtected = lockDecisionManager.isPackageProtected(packageName)
         if (isProtected) {
+            val nowUptime = SystemClock.uptimeMillis()
+
+            if (isRecentsScreenActive) {
+                isRecentsScreenActive = false
+                hideRecentsPrivacyOverlay()
+            }
+
+            // 0.5. RECENTS ROUND-TRIP RETURN RULE:
+            // If user moved to Recents overview and now returns to the same protected app within grace window:
+            if (pendingRecentsProtectedPackage == packageName &&
+                (nowUptime - pendingRecentsTimestamp < RECENTS_RETURN_GRACE_MS) &&
+                lockDecisionManager.isPackageAuthorized(packageName)
+            ) {
+                Log.i(TAG, "[AppLock] RETURN FROM RECENTS → ALLOW package=$packageName (seamless return, session preserved)")
+                pendingRecentsProtectedPackage = null
+                pendingRecentsTimestamp = 0L
+                activeProtectedPackage = packageName
+                currentForegroundPackage = packageName
+                securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
+                _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
+                scope.launch {
+                    updateMonitoringStatus(current = packageName, prev = prevPackage, source = source, requiresLock = false)
+                }
+                return
+            }
+
+            // If user returned from Recents to a DIFFERENT protected app, invalidate the previous one
+            if (pendingRecentsProtectedPackage != null && pendingRecentsProtectedPackage != packageName) {
+                val previousPkg = pendingRecentsProtectedPackage!!
+                pendingRecentsProtectedPackage = null
+                lastExitedProtectedPackage = previousPkg
+                lastExitedProtectedTimestamp = nowUptime
+                Log.i(TAG, "[AppLock] Switched from Recents to different protected app $packageName → revoking $previousPkg")
+                lockDecisionManager.onPackageExited(previousPkg)
+            }
+
             val t1 = eventTimeUptime
             val t2 = receivedTimeUptime
-            val t3 = SystemClock.uptimeMillis()
+            val t3 = nowUptime
 
             // 1. SAME-PACKAGE RULE (Section 10):
             // If user is already inside this protected application, state is PROTECTED_APP_AUTHORIZED,
@@ -402,6 +558,21 @@ class LockController private constructor(
         if (lockDecisionManager.isLauncherPackage(packageName)) {
             val now = SystemClock.uptimeMillis()
 
+            if (isRecentsScreenActive) {
+                isRecentsScreenActive = false
+                hideRecentsPrivacyOverlay()
+            }
+
+            // If user exited Recents to Home, invalidate pending recents protected package
+            if (pendingRecentsProtectedPackage != null) {
+                val recentsExited = pendingRecentsProtectedPackage!!
+                pendingRecentsProtectedPackage = null
+                lastExitedProtectedPackage = recentsExited
+                lastExitedProtectedTimestamp = now
+                Log.i(TAG, "[$source] Exited Recents to HOME → invalidating session for $recentsExited")
+                lockDecisionManager.onPackageExited(recentsExited)
+            }
+
             // A. LockScreenActivity dismissal settle grace window:
             // When user authenticates, LockScreenActivity finishes and uncovers the underlying launcher/app.
             // Do NOT treat this transition settle event as user exiting the protected app!
@@ -447,6 +618,21 @@ class LockController private constructor(
 
         // 3. Unprotected Application Detection
         val now = SystemClock.uptimeMillis()
+
+        if (isRecentsScreenActive) {
+            isRecentsScreenActive = false
+            hideRecentsPrivacyOverlay()
+        }
+
+        // If user exited Recents to an unprotected app, invalidate pending recents protected package
+        if (pendingRecentsProtectedPackage != null) {
+            val recentsExited = pendingRecentsProtectedPackage!!
+            pendingRecentsProtectedPackage = null
+            lastExitedProtectedPackage = recentsExited
+            lastExitedProtectedTimestamp = now
+            Log.i(TAG, "[$source] Exited Recents to unprotected app $packageName → invalidating session for $recentsExited")
+            lockDecisionManager.onPackageExited(recentsExited)
+        }
 
         // A. LockScreenActivity dismissal settle grace window:
         if (activeProtectedPackage != null &&
@@ -561,6 +747,8 @@ class LockController private constructor(
         lastExitedProtectedTimestamp = 0L
         lastAuthSuccessPackage = packageName
         lastAuthSuccessTimestamp = SystemClock.uptimeMillis()
+        pendingRecentsProtectedPackage = null
+        pendingRecentsTimestamp = 0L
         securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
         _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
         Log.i(TAG, "[AppLock] AUTH_SESSION: active | package=$packageName")
@@ -582,6 +770,8 @@ class LockController private constructor(
         )
         activeLockPackage = null
         lastLockLaunchTime = 0L
+        pendingRecentsProtectedPackage = null
+        pendingRecentsTimestamp = 0L
         isLockScreenVisible.set(false)
         activeProtectedPackage = null
         securityState = ForegroundSecurityState.HOME
