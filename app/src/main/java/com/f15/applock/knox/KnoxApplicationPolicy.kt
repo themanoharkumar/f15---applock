@@ -524,21 +524,39 @@ class KnoxApplicationPolicy(
 
     /**
      * Explicitly clears any accidental global application restrictions
-     * (DISALLOW_APPS_CONTROL, DISALLOW_UNINSTALL_APPS) to ensure normal user applications
-     * can always be uninstalled and controlled.
+     * (DISALLOW_APPS_CONTROL, DISALLOW_UNINSTALL_APPS, DISALLOW_CONFIG_NOTIFICATIONS)
+     * and resets keyguard/status bar restrictions to ensure normal user applications
+     * (like WhatsApp) can receive notifications and can always be controlled.
      */
     fun clearGlobalRestrictions() {
         try {
-            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
-            Log.i(TAG, "[DPM] Explicitly cleared global DISALLOW_APPS_CONTROL")
+            val restrictions = dpm.getUserRestrictions(adminComponent)
+            for (key in restrictions.keySet()) {
+                if (restrictions.getBoolean(key, false)) {
+                    dpm.clearUserRestriction(adminComponent, key)
+                    Log.i(TAG, "[DPM] Explicitly cleared active user restriction: $key")
+                }
+            }
         } catch (e: Exception) {
-            Log.w(TAG, "[DPM] Error clearing DISALLOW_APPS_CONTROL", e)
+            Log.w(TAG, "[DPM] Error inspecting/clearing user restrictions", e)
         }
         try {
+            dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_APPS_CONTROL)
+        } catch (_: Exception) {}
+        try {
             dpm.clearUserRestriction(adminComponent, UserManager.DISALLOW_UNINSTALL_APPS)
-            Log.i(TAG, "[DPM] Explicitly cleared global DISALLOW_UNINSTALL_APPS")
+        } catch (_: Exception) {}
+        try {
+            dpm.setKeyguardDisabledFeatures(adminComponent, 0)
+            Log.i(TAG, "[DPM] Reset keyguard disabled features to 0 (all notifications allowed)")
         } catch (e: Exception) {
-            Log.w(TAG, "[DPM] Error clearing DISALLOW_UNINSTALL_APPS", e)
+            Log.d(TAG, "[DPM] setKeyguardDisabledFeatures query/set: ${e.message}")
+        }
+        try {
+            dpm.setStatusBarDisabled(adminComponent, false)
+            Log.i(TAG, "[DPM] Ensured status bar & notification shade are enabled")
+        } catch (e: Exception) {
+            Log.d(TAG, "[DPM] setStatusBarDisabled query/set: ${e.message}")
         }
     }
 

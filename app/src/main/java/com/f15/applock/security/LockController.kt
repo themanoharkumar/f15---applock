@@ -13,6 +13,7 @@ import com.f15.applock.domain.model.ForegroundSecurityState
 import com.f15.applock.domain.model.LockEngineMode
 import com.f15.applock.domain.model.LockEngineState
 import com.f15.applock.domain.model.MonitoringStatus
+import com.f15.applock.data.repository.AppTargetCache
 import com.f15.applock.receiver.ScreenStateReceiver
 import com.f15.applock.ui.activity.LockScreenActivity
 import kotlinx.coroutines.CoroutineScope
@@ -148,7 +149,8 @@ class LockController private constructor(
 
     /**
      * Detailed window state change handler evaluating window class and full-screen state
-     * to eliminate ghost triggers during teardown of backgrounded apps.
+     * to eliminate ghost triggers during teardown of backgrounded apps and ensure notifications
+     * are never blocked.
      */
     fun onWindowStateChanged(
         packageName: String?,
@@ -160,22 +162,42 @@ class LockController private constructor(
     ) {
         if (packageName.isNullOrBlank()) return
 
-        // 1. Non-activity widget filter:
-        // Popups, toasts, menus, and layout wrappers should never trigger app lock if the package
-        // is not already the active authorized protected app.
-        if (isNonActivityWidget(className) && activeProtectedPackage != packageName) {
-            Log.d(TAG, "[$source] Ignoring non-activity widget event for $packageName ($className)")
+        val isProtected = lockDecisionManager.isPackageProtected(packageName)
+
+        // 1. Notification & Floating Overlay Suppression:
+        // Heads-up notifications (HUN), popup banners, toasts, and floating overlays are NOT full-screen
+        // and are NOT activity launches. If a protected app emits a non-full-screen event that is not an Activity,
+        // it must NEVER trigger AppLock, as doing so would block the user from seeing/receiving notifications!
+        if (isProtected && !isFullScreen && !AppTargetCache.isActivity(packageName, className)) {
+            Log.d(TAG, "[$source] Suppressing non-fullscreen notification/overlay for $packageName ($className)")
             return
         }
 
-        // 2. Teardown / Home Exit Grace Filter:
-        // If user just exited this protected package to HOME within the last 1000ms:
-        val now = SystemClock.uptimeMillis()
-        if (securityState == ForegroundSecurityState.HOME &&
+        // 2. Non-activity widget & teardown view filter:
+        // Popups, toasts, menus, and common layout wrappers should never trigger app lock if the package
+        // is not already the active authorized protected app.
+        if (isProtected && AppTargetCache.isCommonView(className) && activeProtectedPackage != packageName) {
+            // If user just exited this package to HOME or an unprotected app, suppress residual teardown views:
+            if (packageName == lastExitedProtectedPackage &&
+                (securityState == ForegroundSecurityState.HOME || securityState == ForegroundSecurityState.UNPROTECTED_APP)
+            ) {
+                Log.d(TAG, "[$source] Suppressing exit residual teardown view for $packageName ($className)")
+                return
+            }
+            if (!isFullScreen) {
+                Log.d(TAG, "[$source] Suppressing non-fullscreen common view for $packageName ($className)")
+                return
+            }
+        }
+
+        // 3. Teardown / Home Exit Filter:
+        // When user exits to HOME or an unprotected app, suppress any residual events from the exited package
+        // unless it's a genuine Activity launch.
+        if ((securityState == ForegroundSecurityState.HOME || securityState == ForegroundSecurityState.UNPROTECTED_APP) &&
             packageName == lastExitedProtectedPackage &&
-            (now - lastExitedProtectedTimestamp < 1000L)
+            !AppTargetCache.isActivity(packageName, className)
         ) {
-            Log.d(TAG, "[$source] Suppressing exit residual event for $packageName ($className)")
+            Log.d(TAG, "[$source] Suppressing exit residual non-activity event for $packageName ($className)")
             return
         }
 
@@ -183,12 +205,7 @@ class LockController private constructor(
     }
 
     private fun isNonActivityWidget(className: String?): Boolean {
-        if (className.isNullOrBlank()) return false
-        return className.contains("PopupWindow") ||
-                className.contains("Toast") ||
-                className.contains("ListPopupWindow") ||
-                className.contains("MenuPopupWindow") ||
-                className.contains("SoftInputWindow")
+        return AppTargetCache.isCommonView(className)
     }
 
     /**
@@ -422,6 +439,8 @@ class LockController private constructor(
         isLockScreenVisible.set(false)
         activeProtectedPackage = packageName
         currentForegroundPackage = packageName
+        lastExitedProtectedPackage = null
+        lastExitedProtectedTimestamp = 0L
         securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
         _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
         Log.i(TAG, "[AppLock] AUTH_SESSION: active | package=$packageName")
