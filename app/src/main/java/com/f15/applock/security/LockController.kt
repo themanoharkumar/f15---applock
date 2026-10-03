@@ -95,6 +95,15 @@ class LockController private constructor(
     @Volatile
     private var lastExitedProtectedTimestamp: Long = 0L
 
+    @Volatile
+    private var isPopUpViewMode: Boolean = false
+
+    @Volatile
+    private var lastAuthSuccessTimestamp: Long = 0L
+
+    @Volatile
+    private var lastAuthSuccessPackage: String? = null
+
     // Diagnostic timestamps for latency measurement (Section 15)
     @Volatile
     private var timingT1: Long = 0L
@@ -126,6 +135,9 @@ class LockController private constructor(
             currentForegroundPackage = null
             activeProtectedPackage = null
             activeLockPackage = null
+            isPopUpViewMode = false
+            lastAuthSuccessPackage = null
+            lastAuthSuccessTimestamp = 0L
             isLockScreenVisible.set(false)
             _engineState.value = LockEngineState.Idle
             updateMonitoringStatus()
@@ -163,6 +175,15 @@ class LockController private constructor(
         if (packageName.isNullOrBlank()) return
 
         val isProtected = lockDecisionManager.isPackageProtected(packageName)
+
+        // Track pop-up view (freeform window) mode dynamically:
+        // An Activity running with !isFullScreen indicates Samsung Pop-up View or multi-window mode.
+        if (isProtected && AppTargetCache.isActivity(packageName, className)) {
+            isPopUpViewMode = !isFullScreen
+            if (isPopUpViewMode) {
+                Log.d(TAG, "[$source] Protected package $packageName active in Pop-up View (freeform window)")
+            }
+        }
 
         // 1. Notification & Floating Overlay Suppression:
         // Heads-up notifications (HUN), popup banners, toasts, and floating overlays are NOT full-screen
@@ -322,14 +343,36 @@ class LockController private constructor(
 
         // 2. HOME / Launcher Detection (Section 5)
         if (lockDecisionManager.isLauncherPackage(packageName)) {
+            val now = SystemClock.uptimeMillis()
+
+            // A. LockScreenActivity dismissal settle grace window:
+            // When user authenticates, LockScreenActivity finishes and uncovers the underlying launcher/app.
+            // Do NOT treat this transition settle event as user exiting the protected app!
+            if (activeProtectedPackage != null &&
+                activeProtectedPackage == lastAuthSuccessPackage &&
+                (now - lastAuthSuccessTimestamp < 2000L)
+            ) {
+                Log.d(TAG, "[$source] Suppressing false exit during unlock dismissal settle window for $activeProtectedPackage")
+                return
+            }
+
+            // B. Pop-up view protection over Home desktop:
+            // If the user is actively using the protected app in Pop-up view over the launcher desktop,
+            // the launcher is just the background wallpaper/backdrop. Do NOT exit the active protected app!
+            if (activeProtectedPackage != null && isPopUpViewMode && lockDecisionManager.isPackageAuthorized(activeProtectedPackage!!)) {
+                Log.d(TAG, "[$source] Suppressing launcher event: protected package $activeProtectedPackage is active in Pop-up view")
+                return
+            }
+
             val exited = activeProtectedPackage
             currentForegroundPackage = packageName
             securityState = ForegroundSecurityState.HOME
+            isPopUpViewMode = false
 
             if (exited != null) {
                 activeProtectedPackage = null
                 lastExitedProtectedPackage = exited
-                lastExitedProtectedTimestamp = SystemClock.uptimeMillis()
+                lastExitedProtectedTimestamp = now
                 Log.i(TAG, "[AppLock] FOREGROUND → HOME | PROTECTED EXIT → package=$exited")
                 lockDecisionManager.onPackageExited(exited)
             }
@@ -347,14 +390,33 @@ class LockController private constructor(
         }
 
         // 3. Unprotected Application Detection
+        val now = SystemClock.uptimeMillis()
+
+        // A. LockScreenActivity dismissal settle grace window:
+        if (activeProtectedPackage != null &&
+            activeProtectedPackage == lastAuthSuccessPackage &&
+            (now - lastAuthSuccessTimestamp < 2000L)
+        ) {
+            Log.d(TAG, "[$source] Suppressing false exit during unlock dismissal settle window for $activeProtectedPackage")
+            return
+        }
+
+        // B. Pop-up view protection over backdrop app:
+        // If protected app is active in Pop-up view floating over this app:
+        if (activeProtectedPackage != null && isPopUpViewMode && lockDecisionManager.isPackageAuthorized(activeProtectedPackage!!)) {
+            Log.d(TAG, "[$source] Suppressing backdrop app event: protected package $activeProtectedPackage is active in Pop-up view")
+            return
+        }
+
         val exited = activeProtectedPackage
         currentForegroundPackage = packageName
         securityState = ForegroundSecurityState.UNPROTECTED_APP
+        isPopUpViewMode = false
 
         if (exited != null) {
             activeProtectedPackage = null
             lastExitedProtectedPackage = exited
-            lastExitedProtectedTimestamp = SystemClock.uptimeMillis()
+            lastExitedProtectedTimestamp = now
             Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
             lockDecisionManager.onPackageExited(exited)
         }
@@ -441,6 +503,8 @@ class LockController private constructor(
         currentForegroundPackage = packageName
         lastExitedProtectedPackage = null
         lastExitedProtectedTimestamp = 0L
+        lastAuthSuccessPackage = packageName
+        lastAuthSuccessTimestamp = SystemClock.uptimeMillis()
         securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
         _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
         Log.i(TAG, "[AppLock] AUTH_SESSION: active | package=$packageName")

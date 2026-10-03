@@ -262,4 +262,117 @@ class Phase9NotificationAndExitTest {
         )
         assertEquals(1, lockRequests)
     }
+
+    // =========================================================================
+    // 5. Samsung Pop-up View (Freeform Window Mode) Tests
+    // =========================================================================
+
+    @Test
+    fun testPopUpView_unlockDismissalDoesNotTriggerFalseExit() {
+        var lockRequests = 0
+        var activeProtectedPackage: String? = null
+        var isAuthorized = false
+        var lastAuthSuccessPackage: String? = null
+        var lastAuthSuccessTimestamp: Long = 0L
+
+        fun onAuthenticationSuccess(pkg: String, now: Long) {
+            activeProtectedPackage = pkg
+            isAuthorized = true
+            lastAuthSuccessPackage = pkg
+            lastAuthSuccessTimestamp = now
+        }
+
+        fun onWindowStateChanged(
+            packageName: String,
+            className: String?,
+            isFullScreen: Boolean,
+            now: Long
+        ) {
+            val isLauncher = (packageName == "com.sec.android.app.launcher")
+
+            if (isLauncher) {
+                // Unlock dismissal settle grace window:
+                if (activeProtectedPackage != null &&
+                    activeProtectedPackage == lastAuthSuccessPackage &&
+                    (now - lastAuthSuccessTimestamp < 2000L)
+                ) {
+                    return // Suppress false exit!
+                }
+                // Otherwise exit
+                activeProtectedPackage = null
+                isAuthorized = false
+                return
+            }
+
+            if (packageName == "com.whatsapp") {
+                if (!isAuthorized) {
+                    lockRequests++
+                }
+            }
+        }
+
+        // 1. WhatsApp in pop-up view is locked initially
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false, 1000L)
+        assertEquals(1, lockRequests)
+
+        // 2. User successfully authenticates at 1050L
+        onAuthenticationSuccess("com.whatsapp", 1050L)
+
+        // 3. LockScreenActivity finishes: 80ms later at 1130L, underlying Launcher layer is exposed
+        onWindowStateChanged("com.sec.android.app.launcher", "com.sec.android.app.launcher.LauncherActivity", true, 1130L)
+        // Must NOT have wiped authorization!
+        assertTrue("Authorization must remain active", isAuthorized)
+        assertEquals("activeProtectedPackage must remain com.whatsapp", "com.whatsapp", activeProtectedPackage)
+
+        // 4. User touches inside WhatsApp pop-up window at 1200L to continue chatting
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false, 1200L)
+        // Must NOT trigger lock again!
+        assertEquals("Pop-up view must NOT trigger lock again after unlock", 1, lockRequests)
+    }
+
+    @Test
+    fun testPopUpView_backgroundDesktopTapsDoNotCauseLockLoop() {
+        var lockRequests = 0
+        var activeProtectedPackage: String? = "com.whatsapp"
+        var isAuthorized = true
+        var isPopUpViewMode = true
+
+        fun onWindowStateChanged(
+            packageName: String,
+            className: String?,
+            isFullScreen: Boolean
+        ) {
+            val isLauncher = (packageName == "com.sec.android.app.launcher")
+
+            if (isLauncher) {
+                // Pop-up view protection over Home desktop:
+                if (activeProtectedPackage != null && isPopUpViewMode && isAuthorized) {
+                    return // Suppress launcher event while pop-up view is active!
+                }
+                activeProtectedPackage = null
+                isAuthorized = false
+                return
+            }
+
+            if (packageName == "com.whatsapp") {
+                if (AppTargetCache.isActivity(packageName, className)) {
+                    isPopUpViewMode = !isFullScreen
+                }
+                if (!isAuthorized) {
+                    lockRequests++
+                }
+            }
+        }
+
+        // WhatsApp active in pop-up view
+        assertEquals(0, lockRequests)
+
+        // User interacts with WhatsApp in pop-up view: background launcher layer emits event
+        onWindowStateChanged("com.sec.android.app.launcher", "android.widget.FrameLayout", true)
+        assertTrue("Pop-up view must preserve authorization", isAuthorized)
+
+        // User taps inside WhatsApp pop-up to send a message
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false)
+        assertEquals("No new lock request during active pop-up session", 0, lockRequests)
+    }
 }
