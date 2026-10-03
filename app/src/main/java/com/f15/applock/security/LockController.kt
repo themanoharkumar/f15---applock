@@ -95,8 +95,32 @@ class LockController private constructor(
     @Volatile
     private var lastExitedProtectedTimestamp: Long = 0L
 
-    @Volatile
-    private var isPopUpViewMode: Boolean = false
+    private val activePopUpPackages = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /**
+     * Checks if [packageName] is currently registered or running in Pop-up View or Multi-Window.
+     */
+    fun isPackageInPopUpOrMultiWindow(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        if (activePopUpPackages.contains(packageName)) return true
+        val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance
+        if (a11y != null && a11y.isPackageInMultiWindowOrFreeform(packageName)) {
+            activePopUpPackages.add(packageName)
+            return true
+        }
+        return false
+    }
+
+    /**
+     * Explicitly registers or removes a package from active Pop-up View tracking.
+     */
+    fun markPackageInPopUpView(packageName: String, inPopUp: Boolean) {
+        if (inPopUp) {
+            activePopUpPackages.add(packageName)
+        } else {
+            activePopUpPackages.remove(packageName)
+        }
+    }
 
     @Volatile
     private var lastAuthSuccessTimestamp: Long = 0L
@@ -135,12 +159,38 @@ class LockController private constructor(
             currentForegroundPackage = null
             activeProtectedPackage = null
             activeLockPackage = null
-            isPopUpViewMode = false
+            activePopUpPackages.clear()
             lastAuthSuccessPackage = null
             lastAuthSuccessTimestamp = 0L
             isLockScreenVisible.set(false)
             _engineState.value = LockEngineState.Idle
             updateMonitoringStatus()
+        }
+    }
+
+    /**
+     * Called when accessibility event TYPE_WINDOWS_CHANGED arrives.
+     * Evaluates whether any active pop-up package was closed, minimized, or removed from screen.
+     */
+    fun onWindowsStructureChanged() {
+        if (activePopUpPackages.isEmpty()) return
+        val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance ?: return
+
+        val windowList = a11y.windows
+        if (windowList.isNullOrEmpty()) return // Do not make negative decisions on transient empty lists
+
+        val snapshot = activePopUpPackages.toList()
+        for (pkg in snapshot) {
+            if (!a11y.isPackageWindowPresent(pkg)) {
+                Log.i(TAG, "[AppLock] Pop-up window for $pkg closed/dismissed from screen → revoking session")
+                activePopUpPackages.remove(pkg)
+                if (activeProtectedPackage == pkg) {
+                    activeProtectedPackage = null
+                }
+                lastExitedProtectedPackage = pkg
+                lastExitedProtectedTimestamp = SystemClock.uptimeMillis()
+                lockDecisionManager.onPackageExited(pkg)
+            }
         }
     }
 
@@ -176,12 +226,19 @@ class LockController private constructor(
 
         val isProtected = lockDecisionManager.isPackageProtected(packageName)
 
-        // Track pop-up view (freeform window) mode dynamically:
-        // An Activity running with !isFullScreen indicates Samsung Pop-up View or multi-window mode.
-        if (isProtected && AppTargetCache.isActivity(packageName, className)) {
-            isPopUpViewMode = !isFullScreen
-            if (isPopUpViewMode) {
-                Log.d(TAG, "[$source] Protected package $packageName active in Pop-up View (freeform window)")
+        // Track pop-up view (freeform window) / multi-window mode dynamically:
+        // Any non-fullscreen event (activity, decor frame, or container) for a protected package
+        // signifies that the application is operating in Samsung Pop-up View or Multi-Window.
+        if (isProtected) {
+            if (!isFullScreen) {
+                activePopUpPackages.add(packageName)
+                Log.d(TAG, "[$source] Protected package $packageName active in Pop-up / Freeform View (!isFullScreen, class=$className)")
+            } else if (AppTargetCache.isActivity(packageName, className)) {
+                // If an Activity explicitly launches in full-screen, verify it's not still in multi-window
+                val a11y = com.f15.applock.accessibility.AppLockAccessibilityService.instance
+                if (a11y == null || !a11y.isPackageInMultiWindowOrFreeform(packageName)) {
+                    activePopUpPackages.remove(packageName)
+                }
             }
         }
 
@@ -356,25 +413,24 @@ class LockController private constructor(
                 return
             }
 
-            // B. Pop-up view protection over Home desktop:
-            // If the user is actively using the protected app in Pop-up view over the launcher desktop,
-            // the launcher is just the background wallpaper/backdrop. Do NOT exit the active protected app!
-            if (activeProtectedPackage != null && isPopUpViewMode && lockDecisionManager.isPackageAuthorized(activeProtectedPackage!!)) {
-                Log.d(TAG, "[$source] Suppressing launcher event: protected package $activeProtectedPackage is active in Pop-up view")
-                return
-            }
-
             val exited = activeProtectedPackage
             currentForegroundPackage = packageName
             securityState = ForegroundSecurityState.HOME
-            isPopUpViewMode = false
 
             if (exited != null) {
-                activeProtectedPackage = null
-                lastExitedProtectedPackage = exited
-                lastExitedProtectedTimestamp = now
-                Log.i(TAG, "[AppLock] FOREGROUND → HOME | PROTECTED EXIT → package=$exited")
-                lockDecisionManager.onPackageExited(exited)
+                if (isPackageInPopUpOrMultiWindow(exited)) {
+                    // Protected package is active in Pop-up View floating over Home desktop!
+                    // The user is multi-tasking outside the pop-up view.
+                    // Preserve its session and do NOT wipe authorization!
+                    Log.i(TAG, "[AppLock] Focus shifted to HOME, but $exited remains active in Pop-up View on screen")
+                    activeProtectedPackage = null
+                } else {
+                    activeProtectedPackage = null
+                    lastExitedProtectedPackage = exited
+                    lastExitedProtectedTimestamp = now
+                    Log.i(TAG, "[AppLock] FOREGROUND → HOME | PROTECTED EXIT → package=$exited")
+                    lockDecisionManager.onPackageExited(exited)
+                }
             }
 
             if (activeLockPackage != null && activeLockPackage != packageName) {
@@ -401,24 +457,24 @@ class LockController private constructor(
             return
         }
 
-        // B. Pop-up view protection over backdrop app:
-        // If protected app is active in Pop-up view floating over this app:
-        if (activeProtectedPackage != null && isPopUpViewMode && lockDecisionManager.isPackageAuthorized(activeProtectedPackage!!)) {
-            Log.d(TAG, "[$source] Suppressing backdrop app event: protected package $activeProtectedPackage is active in Pop-up view")
-            return
-        }
-
         val exited = activeProtectedPackage
         currentForegroundPackage = packageName
         securityState = ForegroundSecurityState.UNPROTECTED_APP
-        isPopUpViewMode = false
 
         if (exited != null) {
-            activeProtectedPackage = null
-            lastExitedProtectedPackage = exited
-            lastExitedProtectedTimestamp = now
-            Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
-            lockDecisionManager.onPackageExited(exited)
+            if (isPackageInPopUpOrMultiWindow(exited)) {
+                // Protected package is active in Pop-up View floating over this backdrop application!
+                // The user is multi-tasking outside the pop-up view (e.g. Dialer, Chrome, Notes).
+                // Preserve its session and do NOT wipe authorization!
+                Log.i(TAG, "[AppLock] Focus shifted to $packageName, but $exited remains active in Pop-up View on screen")
+                activeProtectedPackage = null
+            } else {
+                activeProtectedPackage = null
+                lastExitedProtectedPackage = exited
+                lastExitedProtectedTimestamp = now
+                Log.i(TAG, "[AppLock] PROTECTED EXIT → package=$exited")
+                lockDecisionManager.onPackageExited(exited)
+            }
         }
 
         if (activeLockPackage != null && activeLockPackage != packageName) {
@@ -508,6 +564,11 @@ class LockController private constructor(
         securityState = ForegroundSecurityState.PROTECTED_APP_AUTHORIZED
         _engineState.value = LockEngineState.AccessGranted(packageName, System.currentTimeMillis())
         Log.i(TAG, "[AppLock] AUTH_SESSION: active | package=$packageName")
+
+        if (isPackageInPopUpOrMultiWindow(packageName)) {
+            activePopUpPackages.add(packageName)
+            Log.i(TAG, "[AppLock] Active pop-up session confirmed for $packageName")
+        }
     }
 
     /**

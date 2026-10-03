@@ -92,29 +92,34 @@ class AppLockAccessibilityService : AccessibilityService() {
         super.onServiceConnected()
         instance = this
         val info = serviceInfo ?: AccessibilityServiceInfo()
-        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        info.eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOWS_CHANGED
         info.feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
         info.notificationTimeout = 0
-        info.flags = 0
+        info.flags = AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
         serviceInfo = info
 
         isServiceRunning = true
         LockController.getInstance(applicationContext).setAccessibilityEnabled(true)
-        Log.i(TAG, "[AERA-APPLOCK] Accessibility Service connected (lean, zero-latency event dispatcher)")
+        Log.i(TAG, "[AERA-APPLOCK] Accessibility Service connected (lean, zero-latency event dispatcher with window tracking)")
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
 
-        if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            val pkg = event.packageName?.toString()?.trim()
-            if (!pkg.isNullOrEmpty()) {
-                val className = event.className?.toString()?.trim()
-                val isFullScreen = event.isFullScreen
-                val eventTime = event.eventTime
-                val receivedTime = SystemClock.uptimeMillis()
-                LockController.getInstance(applicationContext)
-                    .onWindowStateChanged(pkg, className, isFullScreen, DetectionSource.ACCESSIBILITY, eventTime, receivedTime)
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                val pkg = event.packageName?.toString()?.trim()
+                if (!pkg.isNullOrEmpty()) {
+                    val className = event.className?.toString()?.trim()
+                    val isFullScreen = event.isFullScreen
+                    val eventTime = event.eventTime
+                    val receivedTime = SystemClock.uptimeMillis()
+                    LockController.getInstance(applicationContext)
+                        .onWindowStateChanged(pkg, className, isFullScreen, DetectionSource.ACCESSIBILITY, eventTime, receivedTime)
+                }
+            }
+            AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
+                LockController.getInstance(applicationContext).onWindowsStructureChanged()
             }
         }
     }
@@ -129,6 +134,55 @@ class AppLockAccessibilityService : AccessibilityService() {
         isServiceRunning = false
         LockController.getInstance(applicationContext).setAccessibilityEnabled(false)
         Log.i(TAG, "[AERA-APPLOCK] Accessibility Service destroyed")
+    }
+
+    /**
+     * Checks if [targetPackage] currently has an interactive window present on screen.
+     */
+    fun isPackageWindowPresent(targetPackage: String): Boolean {
+        return try {
+            val windowList = windows ?: return false
+            for (win in windowList) {
+                val rootPkg = win.root?.packageName?.toString()
+                val title = win.title?.toString()
+                if (rootPkg == targetPackage || (title != null && title.contains(targetPackage))) {
+                    return true
+                }
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /**
+     * Checks if [targetPackage] is currently running in a non-fullscreen window
+     * (Samsung Pop-up View, Freeform, or Multi-Window / Split-screen).
+     */
+    fun isPackageInMultiWindowOrFreeform(targetPackage: String): Boolean {
+        return try {
+            val windowList = windows ?: return false
+            val metrics = resources.displayMetrics
+            val screenW = metrics.widthPixels
+            val screenH = metrics.heightPixels
+            val bounds = android.graphics.Rect()
+
+            for (win in windowList) {
+                val rootPkg = win.root?.packageName?.toString()
+                val title = win.title?.toString()
+                val matches = (rootPkg == targetPackage) || (title != null && title.contains(targetPackage))
+                if (matches) {
+                    if (win.isInPictureInPictureMode) return true
+                    win.getBoundsInScreen(bounds)
+                    if (bounds.width() in 1 until screenW || bounds.height() in 1 until screenH || bounds.left > 0 || bounds.top > 0) {
+                        return true
+                    }
+                }
+            }
+            false
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

@@ -375,4 +375,109 @@ class Phase9NotificationAndExitTest {
         onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false)
         assertEquals("No new lock request during active pop-up session", 0, lockRequests)
     }
+
+    @Test
+    fun testPopUpView_usingAppOutsidePopUpViewPreservesSession() {
+        var lockRequests = 0
+        val activePopUpPackages = mutableSetOf<String>()
+        val authorizations = mutableMapOf<String, Boolean>()
+        var activeProtectedPackage: String? = null
+        var currentForegroundPackage: String? = null
+
+        fun onAuthenticationSuccess(pkg: String, isPopUp: Boolean) {
+            authorizations[pkg] = true
+            activeProtectedPackage = pkg
+            currentForegroundPackage = pkg
+            if (isPopUp) {
+                activePopUpPackages.add(pkg)
+            }
+        }
+
+        fun onWindowStateChanged(
+            packageName: String,
+            className: String?,
+            isFullScreen: Boolean
+        ) {
+            val isProtected = (packageName == "com.whatsapp")
+
+            if (isProtected) {
+                if (!isFullScreen) {
+                    activePopUpPackages.add(packageName)
+                }
+
+                if (authorizations[packageName] == true) {
+                    activeProtectedPackage = packageName
+                    currentForegroundPackage = packageName
+                    return // ALLOW
+                } else {
+                    lockRequests++
+                    return
+                }
+            }
+
+            // Outside app (e.g. Dialer, Chrome, Launcher)
+            val exited = activeProtectedPackage
+            currentForegroundPackage = packageName
+
+            if (exited != null) {
+                if (activePopUpPackages.contains(exited)) {
+                    // Protected app is active in Pop-up view!
+                    // Preserve its session while user multi-tasks outside!
+                    activeProtectedPackage = null
+                } else {
+                    activeProtectedPackage = null
+                    authorizations.remove(exited)
+                }
+            }
+        }
+
+        fun onPopUpWindowClosed(packageName: String) {
+            activePopUpPackages.remove(packageName)
+            authorizations.remove(packageName)
+            if (activeProtectedPackage == packageName) {
+                activeProtectedPackage = null
+            }
+        }
+
+        // 1. Initial WhatsApp launch in Pop-up view -> triggers lock
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.home.ui.HomeActivity", false)
+        assertEquals("First launch in pop-up view must request lock", 1, lockRequests)
+
+        // 2. User successfully authenticates
+        onAuthenticationSuccess("com.whatsapp", isPopUp = true)
+        assertTrue("WhatsApp must be authorized", authorizations["com.whatsapp"] == true)
+        assertTrue("WhatsApp must be in activePopUpPackages", activePopUpPackages.contains("com.whatsapp"))
+
+        // 3. User taps outside the pop-up view to open Dialer
+        onWindowStateChanged("com.samsung.android.dialer", "com.samsung.android.dialer.DialtactsActivity", true)
+        assertEquals("currentForegroundPackage is now dialer", "com.samsung.android.dialer", currentForegroundPackage)
+        assertTrue("WhatsApp authorization MUST remain valid while in pop-up view", authorizations["com.whatsapp"] == true)
+
+        // 4. User dials numbers, uses Dialer (multiple events)
+        onWindowStateChanged("com.samsung.android.dialer", "android.widget.EditText", true)
+        onWindowStateChanged("com.samsung.android.dialer", "com.samsung.android.dialer.DialtactsActivity", true)
+        assertTrue("WhatsApp authorization MUST still be valid", authorizations["com.whatsapp"] == true)
+
+        // 5. User taps back into WhatsApp pop-up view!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false)
+        assertEquals("No new lock request when tapping back into pop-up view", 1, lockRequests)
+        assertEquals("activeProtectedPackage is com.whatsapp again", "com.whatsapp", activeProtectedPackage)
+
+        // 6. User taps outside again to check Chrome
+        onWindowStateChanged("com.android.chrome", "com.google.android.apps.chrome.Main", true)
+        assertTrue("WhatsApp authorization preserved during Chrome usage", authorizations["com.whatsapp"] == true)
+
+        // 7. User taps back into WhatsApp again
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.Conversation", false)
+        assertEquals("Still no new lock request", 1, lockRequests)
+
+        // 8. User closes WhatsApp pop-up window (taps X)
+        onPopUpWindowClosed("com.whatsapp")
+        assertFalse("WhatsApp authorization revoked after closing pop-up window", authorizations.containsKey("com.whatsapp"))
+        assertFalse("activePopUpPackages no longer contains com.whatsapp", activePopUpPackages.contains("com.whatsapp"))
+
+        // 9. User opens WhatsApp again (e.g. from Home or Recents) -> Lock must trigger!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.home.ui.HomeActivity", true)
+        assertEquals("Reopening closed WhatsApp MUST trigger lock", 2, lockRequests)
+    }
 }
