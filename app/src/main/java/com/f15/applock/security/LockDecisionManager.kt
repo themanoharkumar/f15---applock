@@ -153,13 +153,6 @@ class LockDecisionManager(
     }
 
     /**
-     * Returns the current set of user-protected packages.
-     */
-    fun getProtectedPackages(): Set<String> {
-        return cachedLockedPackages
-    }
-
-    /**
      * Checks if a package is a system navigation component or self that must never be locked.
      */
     fun isIgnoredPackage(packageName: String): Boolean {

@@ -4,6 +4,7 @@ import com.f15.applock.data.repository.AppTargetCache
 import com.f15.applock.domain.model.ForegroundSecurityState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -482,100 +483,145 @@ class Phase9NotificationAndExitTest {
     }
 
     // =========================================================================
-    // 7. Recents Activity & Preview Privacy Mask Tests
+    // 6. Recents Overview and Rapid Close/Reopen Deterministic Tests
     // =========================================================================
 
     @Test
-    fun testIsRecentsActivity_correctlyIdentifiesRecents() {
-        fun isRecents(pkg: String?, cls: String?): Boolean {
-            if (pkg.isNullOrBlank()) return false
-            val lowerClass = cls?.lowercase() ?: ""
-            if (lowerClass.contains("recents") ||
-                lowerClass.contains("quickstep") ||
-                lowerClass.contains("overview") ||
-                lowerClass.contains("taskview")
-            ) {
-                return true
-            }
-            if (pkg == "com.android.systemui" && lowerClass.contains("recents")) {
-                return true
-            }
-            return false
-        }
-
-        // Samsung One UI Recents
-        assertTrue(isRecents("com.sec.android.app.launcher", "com.android.quickstep.RecentsActivity"))
-        assertTrue(isRecents("com.sec.android.app.launcher", "com.sec.android.app.launcher.quickstep.RecentsActivity"))
-        assertTrue(isRecents("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.RecentsActivity"))
-
-        // Pixel Launcher Recents
-        assertTrue(isRecents("com.google.android.apps.nexuslauncher", "com.android.quickstep.RecentsActivity"))
-
-        // SystemUI Recents
-        assertTrue(isRecents("com.android.systemui", "com.android.systemui.recents.RecentsActivity"))
-
-        // Samsung One UI Home desktop (NOT Recents!)
-        assertFalse(isRecents("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.LauncherActivity"))
-        assertFalse(isRecents("com.sec.android.app.launcher", "com.sec.android.app.launcher.Launcher"))
-
-        // Samsung One UI Apps Drawer (NOT Recents!)
-        assertFalse(isRecents("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.AppsPickerActivity"))
-
-        // Protected app activities (NOT Recents!)
-        assertFalse(isRecents("com.whatsapp", "com.whatsapp.HomeActivity"))
-        assertFalse(isRecents("com.whatsapp", "com.whatsapp.Conversation"))
-    }
-
-    @Test
-    fun testRecentsRoundtrip_preservesProtectedSessionWithoutLockTrigger() {
+    fun testProtectedApp_immediateCloseAndReopenDeterministicallyTriggersLockEveryTime() {
         var lockRequests = 0
         val authorizations = mutableMapOf<String, Boolean>()
         var activeProtectedPackage: String? = null
-        var isRecentsScreenActive = false
-        var pendingRecentsProtectedPackage: String? = null
-        var pendingRecentsTimestamp = 0L
-        var overlayShown = false
+        var lastAuthSuccessPackage: String? = null
+        var lastAuthSuccessTimestamp: Long = 0L
 
-        fun isRecents(pkg: String?, cls: String?): Boolean {
-            val lower = cls?.lowercase() ?: ""
-            return lower.contains("recents") || lower.contains("quickstep")
+        fun onAuthenticationSuccess(pkg: String, now: Long) {
+            authorizations[pkg] = true
+            activeProtectedPackage = pkg
+            lastAuthSuccessPackage = pkg
+            lastAuthSuccessTimestamp = now
         }
 
         fun onWindowStateChanged(
             packageName: String,
             className: String?,
-            currentTime: Long
+            now: Long
         ) {
-            val isRecents = isRecents(packageName, className)
-
-            if (isRecents) {
-                isRecentsScreenActive = true
-                val exited = activeProtectedPackage
-                if (exited != null) {
-                    pendingRecentsProtectedPackage = exited
-                    pendingRecentsTimestamp = currentTime
-                    activeProtectedPackage = null
-                }
-                overlayShown = true
-                return
-            }
-
             val isProtected = (packageName == "com.whatsapp")
             if (isProtected) {
-                if (isRecentsScreenActive) {
-                    isRecentsScreenActive = false
-                    overlayShown = false
+                // Instantly clear settle window when protected app resumes in foreground
+                if (packageName == lastAuthSuccessPackage) {
+                    lastAuthSuccessPackage = null
+                    lastAuthSuccessTimestamp = 0L
                 }
 
-                // Seamless Recents return rule
-                if (pendingRecentsProtectedPackage == packageName &&
-                    (currentTime - pendingRecentsTimestamp < 30_000L) &&
-                    authorizations[packageName] == true
-                ) {
-                    pendingRecentsProtectedPackage = null
-                    pendingRecentsTimestamp = 0L
+                if (authorizations[packageName] == true) {
                     activeProtectedPackage = packageName
-                    return // ALLOW seamlessly without lock screen
+                    return // ALLOW
+                } else {
+                    lockRequests++
+                    return // TRIGGER LOCK
+                }
+            }
+
+            // Exited to Home screen
+            val isHome = (packageName == "com.sec.android.app.launcher" &&
+                    className?.contains("Launcher", ignoreCase = true) == true)
+            if (isHome) {
+                // Verify settle window (350ms)
+                if (activeProtectedPackage != null &&
+                    activeProtectedPackage == lastAuthSuccessPackage &&
+                    (now - lastAuthSuccessTimestamp < 350L)
+                ) {
+                    return // Suppress false exit during unlock dismissal
+                }
+
+                val exited = activeProtectedPackage
+                if (exited != null) {
+                    authorizations.remove(exited)
+                    activeProtectedPackage = null
+                }
+            }
+        }
+
+        // --- CYCLE 1 ---
+        // 1. User opens WhatsApp from Home (t = 1000)
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1000L)
+        assertEquals("Cycle 1: First open must trigger lock", 1, lockRequests)
+
+        // 2. User authenticates (t = 1050)
+        onAuthenticationSuccess("com.whatsapp", 1050L)
+
+        // 3. WhatsApp resumes (t = 1070) -> settle window cleared immediately
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1070L)
+        assertEquals("activeProtectedPackage must be com.whatsapp", "com.whatsapp", activeProtectedPackage)
+
+        // 4. User immediately closes WhatsApp to Home (t = 1150, <200ms after unlock)
+        onWindowStateChanged("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.LauncherActivity", 1150L)
+        assertFalse("Authorization must be invalidated immediately on close", authorizations.containsKey("com.whatsapp"))
+        assertNull("activeProtectedPackage must be null", activeProtectedPackage)
+
+        // 5. User immediately reopens WhatsApp (t = 1200) -> MUST TRIGGER LOCK!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1200L)
+        assertEquals("Cycle 1: Immediate reopen (<200ms) MUST trigger lock without bypass", 2, lockRequests)
+
+        // --- CYCLE 2 ---
+        // 6. User authenticates again (t = 1250)
+        onAuthenticationSuccess("com.whatsapp", 1250L)
+
+        // 7. WhatsApp resumes (t = 1270)
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1270L)
+
+        // 8. User closes WhatsApp to Home (t = 1350)
+        onWindowStateChanged("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.LauncherActivity", 1350L)
+        assertFalse("Authorization must be invalidated again on close", authorizations.containsKey("com.whatsapp"))
+
+        // 9. User reopens WhatsApp (t = 1400) -> MUST TRIGGER LOCK AGAIN!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1400L)
+        assertEquals("Cycle 2: Second reopen MUST trigger lock deterministically", 3, lockRequests)
+    }
+
+    @Test
+    fun testProtectedApp_recentsRoundtripPreservesSessionAndIntermediateSubviewsDoNotRevoke() {
+        var lockRequests = 0
+        val authorizations = mutableMapOf<String, Boolean>()
+        var activeProtectedPackage: String? = null
+        var pendingRecentsPackage: String? = null
+        var pendingRecentsTimestamp = 0L
+
+        fun isRecents(pkg: String?, cls: String?): Boolean {
+            if (cls.isNullOrBlank()) return false
+            return cls.contains("Recents", ignoreCase = true) ||
+                   cls.contains("Quickstep", ignoreCase = true) ||
+                   cls.contains("TaskSwitcher", ignoreCase = true) ||
+                   cls.contains("Overview", ignoreCase = true)
+        }
+
+        fun isHomeDesktop(pkg: String?, cls: String?): Boolean {
+            if (cls.isNullOrBlank()) return false
+            if (isRecents(pkg, cls)) return false
+            return cls.contains("Launcher", ignoreCase = true) ||
+                   cls.contains("Workspace", ignoreCase = true) ||
+                   cls.contains("Home", ignoreCase = true)
+        }
+
+        fun onWindowStateChanged(
+            packageName: String,
+            className: String?,
+            now: Long
+        ) {
+            val isProtected = (packageName == "com.whatsapp")
+            if (isProtected) {
+                // Check if returning from Recents
+                if (pendingRecentsPackage == packageName) {
+                    val elapsed = now - pendingRecentsTimestamp
+                    if (elapsed < 15_000L && authorizations[packageName] == true) {
+                        pendingRecentsPackage = null
+                        pendingRecentsTimestamp = 0L
+                        activeProtectedPackage = packageName
+                        return // ALLOW
+                    }
+                    pendingRecentsPackage = null
+                    pendingRecentsTimestamp = 0L
                 }
 
                 if (authorizations[packageName] == true) {
@@ -587,117 +633,84 @@ class Phase9NotificationAndExitTest {
                 }
             }
 
-            // Exited to Launcher / Home
+            // Launcher / Recents
             if (packageName == "com.sec.android.app.launcher") {
-                if (isRecentsScreenActive) {
-                    isRecentsScreenActive = false
-                    overlayShown = false
+                if (isRecents(packageName, className)) {
+                    if (activeProtectedPackage != null) {
+                        pendingRecentsPackage = activeProtectedPackage
+                        pendingRecentsTimestamp = now
+                        activeProtectedPackage = null
+                    }
+                    return
                 }
-                if (pendingRecentsProtectedPackage != null) {
-                    authorizations.remove(pendingRecentsProtectedPackage)
-                    pendingRecentsProtectedPackage = null
+
+                // If in Recents, do NOT wipe on intermediate subviews (e.g. FrameLayout, ViewGroup)
+                if (pendingRecentsPackage != null && !isHomeDesktop(packageName, className)) {
+                    return // Preserve pending session!
                 }
-                activeProtectedPackage = null
+
+                // If navigated to Home desktop, revoke pending session
+                if (pendingRecentsPackage != null && isHomeDesktop(packageName, className)) {
+                    authorizations.remove(pendingRecentsPackage)
+                    pendingRecentsPackage = null
+                    pendingRecentsTimestamp = 0L
+                }
+
+                if (activeProtectedPackage != null) {
+                    authorizations.remove(activeProtectedPackage)
+                    activeProtectedPackage = null
+                }
+            }
+
+            // Unprotected app (e.g. Chrome)
+            if (packageName == "com.android.chrome") {
+                if (pendingRecentsPackage != null) {
+                    authorizations.remove(pendingRecentsPackage)
+                    pendingRecentsPackage = null
+                    pendingRecentsTimestamp = 0L
+                }
+                if (activeProtectedPackage != null) {
+                    authorizations.remove(activeProtectedPackage)
+                    activeProtectedPackage = null
+                }
             }
         }
 
         // 1. Initial WhatsApp launch -> locks
         onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 1000L)
-        assertEquals("Initial launch requires authentication", 1, lockRequests)
+        assertEquals(1, lockRequests)
 
         // 2. User unlocks WhatsApp
         authorizations["com.whatsapp"] = true
         activeProtectedPackage = "com.whatsapp"
 
-        // 3. User swipes to Recents overview!
+        // 3. User swipes to Recent Apps overview (com.android.quickstep.RecentsActivity)
         onWindowStateChanged("com.sec.android.app.launcher", "com.android.quickstep.RecentsActivity", 2000L)
-        assertTrue("Recents screen must be active", isRecentsScreenActive)
-        assertTrue("Privacy overlay must be shown to mask recent app thumbnail", overlayShown)
-        assertEquals("Pending recents package must be com.whatsapp", "com.whatsapp", pendingRecentsProtectedPackage)
-        assertTrue("Authorization must remain valid while in Recents", authorizations["com.whatsapp"] == true)
+        assertEquals("com.whatsapp", pendingRecentsPackage)
+        assertTrue("Authorization must remain intact while in Recents", authorizations["com.whatsapp"] == true)
 
-        // 4. User immediately taps WhatsApp card to return back to WhatsApp!
-        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 3000L)
-        assertFalse("Recents screen must no longer be active", isRecentsScreenActive)
-        assertFalse("Privacy overlay must be hidden on return", overlayShown)
-        assertEquals("WhatsApp MUST NOT trigger a second lock screen on round-trip", 1, lockRequests)
-        assertEquals("activeProtectedPackage must be com.whatsapp", "com.whatsapp", activeProtectedPackage)
+        // 4. Samsung Launcher emits intermediate subview FrameLayout while in Recents
+        onWindowStateChanged("com.sec.android.app.launcher", "android.widget.FrameLayout", 2050L)
+        assertEquals("Subviews must not clear pendingRecentsPackage", "com.whatsapp", pendingRecentsPackage)
+        assertTrue("Authorization must remain valid after subviews", authorizations["com.whatsapp"] == true)
 
-        // 5. User moves to Recents again
-        onWindowStateChanged("com.sec.android.app.launcher", "com.android.quickstep.RecentsActivity", 5000L)
-        assertTrue("Privacy overlay shown again in Recents", overlayShown)
+        // 5. User taps WhatsApp card to return to WhatsApp within 15 seconds!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 2800L)
+        assertNull("pendingRecentsPackage cleared on return", pendingRecentsPackage)
+        assertEquals("activeProtectedPackage restored to com.whatsapp", "com.whatsapp", activeProtectedPackage)
+        assertEquals("MUST NOT trigger lock screen on return from Recents", 1, lockRequests)
 
-        // 6. User navigates from Recents to Home screen (exits protected app)
-        onWindowStateChanged("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.LauncherActivity", 6000L)
-        assertFalse("Recents privacy overlay hidden when exiting to Home", overlayShown)
-        assertFalse("WhatsApp authorization MUST be revoked after navigating to Home", authorizations.containsKey("com.whatsapp"))
+        // 6. User swipes to Recents again
+        onWindowStateChanged("com.sec.android.app.launcher", "com.android.quickstep.RecentsActivity", 4000L)
+        assertEquals("com.whatsapp", pendingRecentsPackage)
 
-        // 7. User now taps WhatsApp from Home desktop -> Lock screen MUST trigger!
-        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 8000L)
-        assertEquals("Re-entering WhatsApp from Home MUST trigger lock", 2, lockRequests)
-    }
+        // 7. User navigates from Recents to Home Desktop (LauncherActivity)
+        onWindowStateChanged("com.sec.android.app.launcher", "com.sec.android.app.launcher.activities.LauncherActivity", 5000L)
+        assertNull("pendingRecentsPackage cleared on exiting to Home", pendingRecentsPackage)
+        assertFalse("WhatsApp authorization revoked after navigating from Recents to Home", authorizations.containsKey("com.whatsapp"))
 
-    @Test
-    fun testRecentsToUnprotectedApp_invalidatesProtectedSession() {
-        var lockRequests = 0
-        val authorizations = mutableMapOf<String, Boolean>()
-        var activeProtectedPackage: String? = null
-        var isRecentsScreenActive = false
-        var pendingRecentsProtectedPackage: String? = null
-        var pendingRecentsTimestamp = 0L
-
-        fun isRecents(cls: String?): Boolean = cls?.contains("Recents") == true
-
-        fun onWindowStateChanged(pkg: String, cls: String, time: Long) {
-            if (isRecents(cls)) {
-                isRecentsScreenActive = true
-                if (activeProtectedPackage != null) {
-                    pendingRecentsProtectedPackage = activeProtectedPackage
-                    pendingRecentsTimestamp = time
-                    activeProtectedPackage = null
-                }
-                return
-            }
-
-            if (pkg == "com.whatsapp") {
-                if (pendingRecentsProtectedPackage == pkg &&
-                    (time - pendingRecentsTimestamp < 30_000L) &&
-                    authorizations[pkg] == true
-                ) {
-                    activeProtectedPackage = pkg
-                    return
-                }
-                if (authorizations[pkg] == true) {
-                    activeProtectedPackage = pkg
-                } else {
-                    lockRequests++
-                }
-                return
-            }
-
-            // Unprotected app (e.g. Chrome)
-            if (isRecentsScreenActive) {
-                isRecentsScreenActive = false
-            }
-            if (pendingRecentsProtectedPackage != null) {
-                authorizations.remove(pendingRecentsProtectedPackage)
-                pendingRecentsProtectedPackage = null
-            }
-        }
-
-        // WhatsApp unlocked
-        authorizations["com.whatsapp"] = true
-        activeProtectedPackage = "com.whatsapp"
-
-        // Move to Recents
-        onWindowStateChanged("com.sec.android.app.launcher", "com.android.quickstep.RecentsActivity", 1000L)
-
-        // Select Chrome in Recents
-        onWindowStateChanged("com.android.chrome", "com.google.android.apps.chrome.Main", 2000L)
-        assertFalse("WhatsApp authorization revoked after opening Chrome from Recents", authorizations.containsKey("com.whatsapp"))
-
-        // Switch back to WhatsApp -> Requires lock!
-        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 3000L)
-        assertEquals("Switching back to WhatsApp after Chrome MUST require authentication", 1, lockRequests)
+        // 8. User taps WhatsApp icon on Home desktop -> MUST trigger lock!
+        onWindowStateChanged("com.whatsapp", "com.whatsapp.HomeActivity", 6000L)
+        assertEquals("Opening WhatsApp from Home after Recents MUST trigger lock", 2, lockRequests)
     }
 }
