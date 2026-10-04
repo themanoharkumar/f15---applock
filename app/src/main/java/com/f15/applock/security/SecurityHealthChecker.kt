@@ -155,15 +155,20 @@ class SecurityHealthChecker(
         }
 
         // 7. Screen & Window Security
+        val recentsPrivacy = com.f15.applock.recents.RecentsPrivacyManager.getInstance(context).capability
+        val isThirdPartySupported = recentsPrivacy.status == com.f15.applock.recents.RecentsPrivacyStatus.SUPPORTED
         items.add(
             HealthCheckItem(
                 id = "window_privacy",
-                title = "Window & Snapshot Security",
-                isHealthy = true,
-                summary = "FLAG_SECURE active on authentication screens",
+                title = "Recents Privacy & Snapshot Security",
+                isHealthy = isThirdPartySupported,
+                summary = "AppLock screens secured via FLAG_SECURE. ⚠ Platform Limited: Android OS architecture isolates 3rd-party task snapshots.",
                 isCritical = false
             )
         )
+        if (!isThirdPartySupported) {
+            recommendations.add("Recents Privacy: Android OS process isolation prohibits external masking of 3rd-party task snapshots in Recents.")
+        }
 
         // Calculate Overall Status
         val overallStatus = when {

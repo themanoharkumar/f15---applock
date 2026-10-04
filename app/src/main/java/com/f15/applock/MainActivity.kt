@@ -78,6 +78,14 @@ class MainActivity : FragmentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Hardening: Prevent screen capture, recents snapshot preview, and screen recording on Admin & PIN screens
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            setRecentsScreenshotEnabled(false)
+        }
         enableEdgeToEdge()
 
         // Phase 7 & 8: Reconcile Samsung Knox & Device Owner protection and security posture on startup

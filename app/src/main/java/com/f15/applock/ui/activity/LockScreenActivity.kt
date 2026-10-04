@@ -113,6 +113,9 @@ class LockScreenActivity : FragmentActivity() {
             android.view.WindowManager.LayoutParams.FLAG_SECURE,
             android.view.WindowManager.LayoutParams.FLAG_SECURE
         )
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            setRecentsScreenshotEnabled(false)
+        }
         enableEdgeToEdge()
 
         val initialPackage = intent.getStringExtra(EXTRA_PACKAGE_NAME) ?: ""

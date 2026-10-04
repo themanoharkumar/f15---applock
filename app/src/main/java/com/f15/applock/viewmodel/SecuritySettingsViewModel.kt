@@ -67,7 +67,10 @@ data class SecuritySettingsUiState(
     val securityPostureReport: com.f15.applock.security.SecurityPostureReport? = null,
     val showRecoveryDialog: Boolean = false,
     val recoveryErrorMessage: String? = null,
-    val recoverySuccessMessage: String? = null
+    val recoverySuccessMessage: String? = null,
+    // Recents Privacy & Protected-App Preview Protection
+    val recentsPrivacyStatus: com.f15.applock.recents.RecentsPrivacyStatus = com.f15.applock.recents.RecentsPrivacyStatus.PLATFORM_LIMITED,
+    val recentsPrivacyCapability: com.f15.applock.recents.RecentsPrivacyCapability? = null
 )
 
 /**
@@ -92,6 +95,7 @@ class SecuritySettingsViewModel(
     private val lockController = LockController.getInstance(context)
     private val deviceOwnerManager = DeviceOwnerManager.getInstance(context)
     private val knoxManager = com.f15.applock.knox.KnoxManagerImpl.getInstance(context)
+    private val recentsPrivacyManager = com.f15.applock.recents.RecentsPrivacyManager.getInstance(context)
     private val securityStateManager = com.f15.applock.security.SecurityStateManager.getInstance(context)
     private val securityRecoveryManager = com.f15.applock.security.SecurityRecoveryManager(
         context,
@@ -114,7 +118,9 @@ class SecuritySettingsViewModel(
             isAccessibilityEnabled = AppLockAccessibilityService.isAccessibilityPermissionGranted(context),
             isAccessibilityRunning = AppLockAccessibilityService.isServiceRunning,
             knoxPolicyState = knoxManager.getAppProtectionStatus(context.packageName),
-            knoxCapability = knoxManager.getCapabilities()
+            knoxCapability = knoxManager.getCapabilities(),
+            recentsPrivacyStatus = recentsPrivacyManager.capability.status,
+            recentsPrivacyCapability = recentsPrivacyManager.capability
         )
     )
     val uiState: StateFlow<SecuritySettingsUiState> = _uiState.asStateFlow()
@@ -168,6 +174,15 @@ class SecuritySettingsViewModel(
         viewModelScope.launch {
             securityStateManager.postureFlow.collect { posture ->
                 _uiState.value = _uiState.value.copy(securityPostureReport = posture)
+            }
+        }
+        viewModelScope.launch {
+            recentsPrivacyManager.capabilityFlow.collect { cap ->
+                _uiState.value = _uiState.value.copy(
+                    recentsPrivacyStatus = cap.status,
+                    recentsPrivacyCapability = cap
+                )
+                refreshHealthReport()
             }
         }
         refreshMonitoringStatus()

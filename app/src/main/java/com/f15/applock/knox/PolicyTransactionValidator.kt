@@ -73,6 +73,36 @@ object PolicyTransactionValidator {
     }
 
     /**
+     * Validates that an arbitrary package identifier conforms to valid format and is not wildcard/empty.
+     */
+    fun validatePackage(targetPackage: String): PolicyValidationResult {
+        val trimmed = targetPackage.trim()
+
+        if (trimmed.isEmpty()) {
+            return reject(
+                reason = "Empty package identifier",
+                violation = "Empty target package cannot be targeted by policy"
+            )
+        }
+
+        if (trimmed == "*" || trimmed.contains("*")) {
+            return reject(
+                reason = "Wildcard package rejected",
+                violation = "Wildcard '*' would apply policy globally across all applications"
+            )
+        }
+
+        if (!PACKAGE_REGEX.matches(trimmed)) {
+            return reject(
+                reason = "Malformed package format",
+                violation = "Package string '$trimmed' does not conform to RFC package naming specifications"
+            )
+        }
+
+        return PolicyValidationResult.Approved
+    }
+
+    /**
      * Validates a batch package list for application-level policy application.
      */
     fun validatePackageList(packages: List<String>, maxAllowed: Int = 1): PolicyValidationResult {

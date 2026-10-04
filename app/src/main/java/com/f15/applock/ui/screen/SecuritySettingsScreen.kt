@@ -555,6 +555,13 @@ private fun SecurityPostureDashboardCard(
                     isPassing = report?.isConfigIntegrityValid ?: true,
                     detail = if (report?.isConfigIntegrityValid != false) "Verified" else "Tampered!"
                 )
+                val isRecentsLimited = uiState.recentsPrivacyStatus == com.f15.applock.recents.RecentsPrivacyStatus.PLATFORM_LIMITED
+                PostureCheckRow(
+                    label = "Recents Preview Privacy",
+                    isPassing = uiState.recentsPrivacyStatus == com.f15.applock.recents.RecentsPrivacyStatus.SUPPORTED,
+                    isWarning = isRecentsLimited,
+                    detail = if (isRecentsLimited) "⚠ Platform Limited" else uiState.recentsPrivacyStatus.displayLabel
+                )
             }
 
             // Warnings / Issues Breakdown Box
@@ -620,9 +627,14 @@ private fun SecurityPostureDashboardCard(
 private fun PostureCheckRow(
     label: String,
     isPassing: Boolean,
-    detail: String? = null
+    detail: String? = null,
+    isWarning: Boolean = false
 ) {
-    val statusColor = if (isPassing) Color(0xFF4CAF50) else Color(0xFFE53935)
+    val statusColor = when {
+        isWarning -> Color(0xFFFFA000)
+        isPassing -> Color(0xFF4CAF50)
+        else -> Color(0xFFE53935)
+    }
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
