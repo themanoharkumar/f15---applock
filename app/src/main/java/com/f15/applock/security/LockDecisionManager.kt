@@ -33,6 +33,41 @@ class LockDecisionManager(
 
     companion object {
         private const val TAG = "LockDecisionManager"
+
+        /**
+         * System overlays, contextual tools, media companions, and assistants that do NOT
+         * represent navigating away from the active application.
+         */
+        val TRANSIENT_OVERLAY_PACKAGES: Set<String> = setOf(
+            "com.samsung.android.biometrics.app.setting",
+            "com.google.android.permissioncontroller",
+            "com.android.permissioncontroller",
+            "com.android.systemui",
+            "android",
+            // Google Circle to Search, Google Assistant, and System Intelligence
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.as",
+            "com.google.android.as.oss",
+            "com.google.android.apps.search.assistant",
+            "com.google.android.apps.googleassistant",
+            "com.google.android.voiceinteraction",
+            // Samsung Gallery integrated media viewers & editors
+            "com.samsung.android.video",
+            "com.sec.android.app.videoplayer",
+            "com.samsung.android.app.videoplayer",
+            "com.sec.android.mimage.photoretouching",
+            "com.sec.android.app.vepreload",
+            "com.sec.android.app.ve",
+            "com.samsung.android.videoeditor",
+            "com.samsung.android.app.moviecreator",
+            // Samsung companion overlays & intelligence
+            "com.samsung.android.visionintelligence",
+            "com.samsung.android.visualsearch",
+            "com.samsung.android.bixby.agent",
+            "com.samsung.android.rubin.app",
+            "com.samsung.android.smartcapture",
+            "com.samsung.android.app.cocktailbarservice"
+        )
     }
 
     // Map storing per-app authorization sessions
@@ -165,14 +200,16 @@ class LockDecisionManager(
 
     /**
      * Checks if a package is a transient system overlay, input method (soft keyboard),
-     * biometric prompt, or self that does NOT represent navigating away from the active application.
+     * biometric prompt, assistant/search overlay (e.g. Google Circle to Search),
+     * media companion (e.g. Samsung Video inside Gallery), or self that does NOT
+     * represent navigating away from the active application.
      */
     fun isTransientOverlay(packageName: String): Boolean {
         if (packageName.isBlank()) return true
         if (packageName == myPackageName) return true
-        if (packageName == "com.samsung.android.biometrics.app.setting") return true
-        if (packageName == "com.google.android.permissioncontroller" || packageName == "com.android.permissioncontroller") return true
-        if (packageName == "com.android.systemui" || packageName == "android") return true
+        // If the package is explicitly protected by the user, never treat as transient overlay
+        if (isPackageProtected(packageName)) return false
+        if (TRANSIENT_OVERLAY_PACKAGES.contains(packageName)) return true
         if (isInputMethod(packageName)) return true
         return false
     }
